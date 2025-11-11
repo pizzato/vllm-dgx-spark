@@ -15,8 +15,8 @@ RAY_VERSION="${RAY_VERSION:-2.51.0}"
 # Model configuration
 MODEL="${MODEL:-meta-llama/Llama-3.3-70B-Instruct}"
 TENSOR_PARALLEL="${TENSOR_PARALLEL:-2}"  # Default to 2 for distributed inference
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-2048}"
-GPU_MEMORY_UTIL="${GPU_MEMORY_UTIL:-0.70}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"   # Increased for better performance
+GPU_MEMORY_UTIL="${GPU_MEMORY_UTIL:-0.90}"  # Increased for better throughput
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Auto-detect Network Configuration
@@ -258,26 +258,26 @@ docker exec "${NAME}" bash -lc "
     --max-model-len ${MAX_MODEL_LEN} \
     --gpu-memory-utilization ${GPU_MEMORY_UTIL} \
     --download-dir \$HF_HOME \
-    --enforce-eager \
     > /var/log/vllm.log 2>&1 &
 
   sleep 1
 " || true
 
 log "  vLLM server process started"
-log "  Waiting for vLLM API to become ready (this may take 30-60 seconds)..."
+log "  ⚠️  CUDA graph compilation may take 1-2 minutes on first startup"
+log "  Waiting for vLLM API to become ready..."
 log ""
 
-# Wait for vLLM to become ready
+# Wait for vLLM to become ready (longer timeout for CUDA graph compilation)
 VLLM_READY=false
-for i in {1..60}; do
+for i in {1..180}; do
   if docker exec "${NAME}" bash -lc "curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1"; then
     log "  ✅ vLLM server is ready and accepting requests (${i}s)"
     VLLM_READY=true
     break
   fi
-  if [ $i -eq 60 ]; then
-    log "  ⚠️  vLLM not ready after 60s - continuing anyway"
+  if [ $i -eq 180 ]; then
+    log "  ⚠️  vLLM not ready after 3 minutes - continuing anyway"
     log "     Check logs: docker exec ${NAME} tail -50 /var/log/vllm.log"
   fi
   sleep 1
@@ -346,5 +346,10 @@ echo "  Model:              ${MODEL}"
 echo "  Tensor Parallelism: ${TENSOR_PARALLEL} GPUs"
 echo "  Max Context:        ${MAX_MODEL_LEN} tokens"
 echo "  GPU Memory:         ${GPU_MEMORY_UTIL} utilization"
+echo "  CUDA Graphs:        Enabled (optimized for performance)"
+echo ""
+echo "📊 Expected Performance:"
+echo "  Throughput:         50-100 tokens/second"
+echo "  First request:      May be slower (graph warmup)"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
