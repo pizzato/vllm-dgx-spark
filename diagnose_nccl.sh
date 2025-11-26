@@ -100,7 +100,7 @@ echo ""
 print_check "1. InfiniBand/RoCE Device Detection"
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# Check for ibdev2netdev
+# Check for ibdev2netdev first, then fall back to ibstat
 if has_cmd ibdev2netdev; then
   print_ok "ibdev2netdev command available"
 
@@ -127,9 +127,44 @@ if has_cmd ibdev2netdev; then
     print_fail "No IB/RoCE devices detected"
     ISSUES_FOUND=$((ISSUES_FOUND + 1))
   fi
+elif [ -x /usr/sbin/ibstat ] || has_cmd ibstat; then
+  # Fall back to ibstat (part of infiniband-diags, usually in /usr/sbin)
+  print_ok "Using ibstat for IB detection"
+
+  IBSTAT_PATH="/usr/sbin/ibstat"
+  if [ "$CHECK_CONTAINER" = true ]; then
+    IB_STAT=$(docker exec "$CONTAINER" $IBSTAT_PATH 2>/dev/null || echo "")
+  else
+    IB_STAT=$($IBSTAT_PATH 2>/dev/null || echo "")
+  fi
+
+  if [ -n "$IB_STAT" ]; then
+    # Parse ibstat output for active devices
+    ACTIVE_PORTS=$(echo "$IB_STAT" | grep -B5 "State: Active" | grep "CA '" | sed "s/.*CA '\\([^']*\\)'.*/\\1/" || echo "")
+    ACTIVE_COUNT=$(echo "$IB_STAT" | grep -c "State: Active" || echo "0")
+
+    if [ "$ACTIVE_COUNT" -gt 0 ]; then
+      print_ok "$ACTIVE_COUNT active IB/RoCE port(s) found:"
+      echo "$IB_STAT" | grep -E "^CA '|State:|Rate:" | head -20 | while read -r line; do
+        if echo "$line" | grep -q "Active"; then
+          echo -e "      ${GREEN}$line${NC}"
+        elif echo "$line" | grep -q "CA '"; then
+          echo -e "      ${CYAN}$line${NC}"
+        else
+          echo -e "      $line"
+        fi
+      done
+    else
+      print_warn "No active IB/RoCE ports found"
+      WARNINGS_FOUND=$((WARNINGS_FOUND + 1))
+    fi
+  else
+    print_fail "ibstat returned no output"
+    ISSUES_FOUND=$((ISSUES_FOUND + 1))
+  fi
 else
-  print_warn "ibdev2netdev not found - cannot detect IB devices"
-  print_info "Install with: apt-get install -y infiniband-diags"
+  print_warn "Neither ibdev2netdev nor ibstat found"
+  print_info "Install with: apt-get install -y infiniband-diags rdma-core"
   WARNINGS_FOUND=$((WARNINGS_FOUND + 1))
 fi
 
@@ -304,32 +339,41 @@ print_check "6. vLLM Log Analysis (if running)"
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 if [ "$CHECK_CONTAINER" = true ]; then
-  VLLM_LOG=$(docker exec "$CONTAINER" cat /var/log/vllm.log 2>/dev/null | tail -200 || echo "")
+  # Check vLLM log directly in container to avoid shell escaping issues with large logs
+  if docker exec "$CONTAINER" test -f /var/log/vllm.log 2>/dev/null; then
+    # Check for NCCL IB/RoCE usage - look for specific NET/IB or IBext patterns
+    IB_LINES=$(docker exec "$CONTAINER" grep -E "NET/IB|IBext|GPU Direct RDMA" /var/log/vllm.log 2>/dev/null | head -5 || echo "")
+    SOCKET_LINES=$(docker exec "$CONTAINER" grep -E "NET/Socket|Using network Socket" /var/log/vllm.log 2>/dev/null | head -3 || echo "")
 
-  if [ -n "$VLLM_LOG" ]; then
-    # Check for NCCL IB usage
-    if echo "$VLLM_LOG" | grep -qi "NCCL.*IB\|InfiniBand\|ibv_"; then
-      print_ok "vLLM logs show InfiniBand/RDMA activity"
-      echo "$VLLM_LOG" | grep -i "NCCL.*IB\|InfiniBand\|ibv_" | tail -3 | while read -r line; do
-        echo -e "      ${GREEN}$(echo "$line" | cut -c1-80)${NC}"
+    if [ -n "$IB_LINES" ]; then
+      print_ok "vLLM is using InfiniBand/RoCE transport"
+      echo "$IB_LINES" | while read -r line; do
+        # Extract just the relevant part
+        CLEAN_LINE=$(echo "$line" | sed 's/.*NCCL INFO //' | cut -c1-70)
+        echo -e "      ${GREEN}${CLEAN_LINE}${NC}"
       done
-    elif echo "$VLLM_LOG" | grep -qi "NCCL.*Socket\|fallback.*socket"; then
+    elif [ -n "$SOCKET_LINES" ]; then
       print_fail "vLLM is using Socket transport - NOT using InfiniBand!"
-      echo "$VLLM_LOG" | grep -i "socket" | tail -3 | while read -r line; do
-        echo -e "      ${RED}$(echo "$line" | cut -c1-80)${NC}"
+      print_info "This means NCCL is falling back to Ethernet (slower)"
+      echo "$SOCKET_LINES" | while read -r line; do
+        CLEAN_LINE=$(echo "$line" | sed 's/.*NCCL INFO //' | cut -c1-70)
+        echo -e "      ${RED}${CLEAN_LINE}${NC}"
       done
       ISSUES_FOUND=$((ISSUES_FOUND + 1))
     else
       print_info "No clear NCCL transport indication in logs"
+      print_info "Look for 'NET/IB' (good) or 'NET/Socket' (bad) in logs"
     fi
 
-    # Check for NCCL errors
-    if echo "$VLLM_LOG" | grep -qi "NCCL.*error\|NCCL.*fail"; then
-      print_warn "NCCL errors found in vLLM logs:"
-      echo "$VLLM_LOG" | grep -i "NCCL.*error\|NCCL.*fail" | tail -3 | while read -r line; do
-        echo -e "      ${YELLOW}$(echo "$line" | cut -c1-80)${NC}"
+    # Check for actual NCCL errors (not warnings or info messages)
+    # Exclude benign WARN messages like "unknown event type" which are not actionable
+    NCCL_ERRORS=$(docker exec "$CONTAINER" grep -iE "NCCL (error|failed|failure)" /var/log/vllm.log 2>/dev/null | grep -vi "INFO" | tail -3 || echo "")
+    if [ -n "$NCCL_ERRORS" ]; then
+      print_fail "NCCL errors found in vLLM logs:"
+      echo "$NCCL_ERRORS" | while read -r line; do
+        echo -e "      ${RED}$(echo "$line" | cut -c1-80)${NC}"
       done
-      WARNINGS_FOUND=$((WARNINGS_FOUND + 1))
+      ISSUES_FOUND=$((ISSUES_FOUND + 1))
     fi
   else
     print_info "No vLLM log found or vLLM not running"
@@ -376,23 +420,21 @@ fi
 echo ""
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-print_header "Performance Expectations"
+print_header "InfiniBand vs Ethernet"
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 echo ""
-echo "  Based on eugr's benchmarks (Qwen3-30B-A3B):"
+echo "  InfiniBand/RoCE provides significant performance benefits for"
+echo "  multi-node tensor parallel inference:"
 echo ""
-echo "  ┌─────────────────────┬───────────┬────────────┬─────────────┐"
-echo "  │ Configuration       │ Ethernet  │ InfiniBand │ Improvement │"
-echo "  ├─────────────────────┼───────────┼────────────┼─────────────┤"
-echo "  │ Tensor Parallel     │   56 t/s  │   76 t/s   │    +36%     │"
-echo "  │ Pipeline Parallel   │   57 t/s  │   58 t/s   │    ~same    │"
-echo "  │ Data Parallel       │   40 t/s  │   53 t/s   │    +33%     │"
-echo "  │ Single Node         │   65 t/s  │    N/A     │  baseline   │"
-echo "  └─────────────────────┴───────────┴────────────┴─────────────┘"
+echo "  - 30-40% higher throughput vs Ethernet for tensor parallelism"
+echo "  - GPU Direct RDMA enables direct GPU-to-GPU memory transfers"
+echo "  - Lower latency for NCCL collective operations"
 echo ""
-echo "  Key insight: Tensor Parallel with InfiniBand (76 t/s) beats"
-echo "  Single Node (65 t/s). Without IB, TP is slower than single node!"
+echo "  Key indicators of proper IB configuration:"
+echo "    - vLLM logs show 'NET/IB' or 'IBext' (not 'NET/Socket')"
+echo "    - 'GPU Direct RDMA enabled' in NCCL output"
+echo "    - ibstat shows 'State: Active' on RoCE ports"
 echo ""
 
 exit $ISSUES_FOUND

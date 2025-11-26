@@ -41,10 +41,25 @@ We initially attempted to follow NVIDIA's playbook at https://build.nvidia.com/s
    - Sufficient disk space for models (70B models need ~140GB)
    - Default cache location: `/raid/hf-cache` (automatically created if needed)
    - To use a different location, set `HF_CACHE` environment variable before running scripts
+   - **⚠️ IMPORTANT:** Fix HuggingFace cache permissions on both nodes (see step below)
 
 5. **SSH Access**
    - SSH keys configured for passwordless login between nodes
    - Test: `ssh <worker-node-ip> hostname`
+
+6. **HuggingFace Cache Permissions**
+
+   Docker containers run as root and create files owned by root in the HF cache. This causes permission issues when syncing models between nodes. **Run this once on both nodes:**
+
+   ```bash
+   # On head node
+   sudo chown -R $USER /raid/hf-cache
+
+   # On worker node (replace with your worker IP)
+   ssh <worker-ip> "sudo chown -R \$USER /raid/hf-cache"
+   ```
+
+   Alternatively, run `source ./setup-env.sh` which will detect and offer to fix permission issues automatically.
 
 ### Environment Configuration
 

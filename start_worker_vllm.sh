@@ -14,6 +14,9 @@ HF_TOKEN="${HF_TOKEN:-}"  # Set via: export HF_TOKEN=hf_xxx
 # Model configuration - MUST match the head node's MODEL setting
 MODEL="${MODEL:-openai/gpt-oss-120b}"
 
+# Skip model download (set by head script when model is synced via rsync)
+SKIP_MODEL_DOWNLOAD="${SKIP_MODEL_DOWNLOAD:-}"
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Auto-detect Network Configuration
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -219,6 +222,7 @@ if [ -n "${HF_TOKEN}" ]; then
   HF_TOKEN_ENV="-e HF_TOKEN=${HF_TOKEN}"
 fi
 
+# Run container as root (required for NVIDIA/vLLM)
 docker run -d \
   --restart unless-stopped \
   --name "${WORKER_NAME}" \
@@ -295,32 +299,15 @@ log "  Ray ${INSTALLED_RAY_VERSION} installed"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-log "Step 7/8: Pre-downloading model weights"
-log "  Model: ${MODEL}"
-log "  This may take a while for large models on first download..."
-log ""
-log "  ⚠️  IMPORTANT: This model MUST match the head node's MODEL setting!"
-log ""
+if [ -n "${SKIP_MODEL_DOWNLOAD}" ]; then
+  log "Step 7/8: Verifying model weights (synced from head)"
+  log "  Model: ${MODEL}"
+  log "  Skipping download - model was synced from head node via rsync"
 
-# Build HF token arg if provided
-HF_TOKEN_ARG=""
-if [ -n "${HF_TOKEN}" ]; then
-  HF_TOKEN_ARG="--token ${HF_TOKEN}"
-fi
-
-# Download model with verification (using 'hf download' instead of deprecated 'huggingface-cli download')
-if ! docker exec "${WORKER_NAME}" bash -lc "
-  export HF_HOME=/root/.cache/huggingface
-  echo '  Downloading model files (excluding original/* and metal/* to save space)...'
-  hf download ${MODEL} ${HF_TOKEN_ARG} --exclude 'original/*' --exclude 'metal/*' 2>&1 | tail -5
-"; then
-  error "Failed to download model ${MODEL}"
-fi
-
-# Verify model was downloaded by checking for config.json
-if ! docker exec "${WORKER_NAME}" bash -lc "
-  export HF_HOME=/root/.cache/huggingface
-  python3 -c \"
+  # Verify model was synced by checking for config.json
+  if ! docker exec "${WORKER_NAME}" bash -lc "
+    export HF_HOME=/root/.cache/huggingface
+    python3 -c \"
 from huggingface_hub import snapshot_download
 import os
 path = snapshot_download('${MODEL}', local_files_only=True)
@@ -329,11 +316,52 @@ if not os.path.exists(config_path):
     raise FileNotFoundError(f'Model config not found at {config_path}')
 print(f'  ✅ Model verified at: {path}')
 \"
-"; then
-  error "Model verification failed - config.json not found"
-fi
+  "; then
+    error "Model verification failed - model may not have been synced correctly from head"
+  fi
 
-log "  Model download complete and verified"
+  log "  Model verification complete"
+else
+  log "Step 7/8: Pre-downloading model weights"
+  log "  Model: ${MODEL}"
+  log "  This may take a while for large models on first download..."
+  log ""
+  log "  ⚠️  IMPORTANT: This model MUST match the head node's MODEL setting!"
+  log ""
+
+  # Build HF token arg if provided
+  HF_TOKEN_ARG=""
+  if [ -n "${HF_TOKEN}" ]; then
+    HF_TOKEN_ARG="--token ${HF_TOKEN}"
+  fi
+
+  # Download model with verification (using 'hf download' instead of deprecated 'huggingface-cli download')
+  if ! docker exec "${WORKER_NAME}" bash -lc "
+    export HF_HOME=/root/.cache/huggingface
+    echo '  Downloading model files (excluding original/* and metal/* to save space)...'
+    hf download ${MODEL} ${HF_TOKEN_ARG} --exclude 'original/*' --exclude 'metal/*' 2>&1 | tail -5
+  "; then
+    error "Failed to download model ${MODEL}"
+  fi
+
+  # Verify model was downloaded by checking for config.json
+  if ! docker exec "${WORKER_NAME}" bash -lc "
+    export HF_HOME=/root/.cache/huggingface
+    python3 -c \"
+from huggingface_hub import snapshot_download
+import os
+path = snapshot_download('${MODEL}', local_files_only=True)
+config_path = os.path.join(path, 'config.json')
+if not os.path.exists(config_path):
+    raise FileNotFoundError(f'Model config not found at {config_path}')
+print(f'  ✅ Model verified at: {path}')
+\"
+  "; then
+    error "Model verification failed - config.json not found"
+  fi
+
+  log "  Model download complete and verified"
+fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

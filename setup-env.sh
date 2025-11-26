@@ -108,6 +108,40 @@ echo "   You only need to provide the essential configuration below."
 echo ""
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Fix HuggingFace Cache Permissions (Required)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+HF_CACHE="${HF_CACHE:-/raid/hf-cache}"
+echo -e "${YELLOW}Checking HuggingFace cache permissions...${NC}"
+
+# Check if HF cache exists and fix permissions if needed
+if [ -d "$HF_CACHE" ]; then
+    if [ ! -w "$HF_CACHE" ]; then
+        echo -e "${RED}⚠${NC}  HF cache at $HF_CACHE is not writable by current user"
+        echo "   Docker containers run as root and may have created files owned by root."
+        echo ""
+        echo -e "${YELLOW}To fix permissions, run:${NC}"
+        echo "   sudo chown -R \$USER $HF_CACHE"
+        echo ""
+        read -p "Would you like to fix permissions now? (requires sudo) [y/N]: " fix_perms
+        if [[ "$fix_perms" =~ ^[Yy]$ ]]; then
+            echo "Running: sudo chown -R $USER $HF_CACHE"
+            if sudo chown -R "$USER" "$HF_CACHE"; then
+                echo -e "${GREEN}✓${NC} Permissions fixed successfully"
+            else
+                echo -e "${RED}✗${NC} Failed to fix permissions. Please run manually:"
+                echo "   sudo chown -R \$USER $HF_CACHE"
+            fi
+        fi
+    else
+        echo -e "${GREEN}✓${NC} HF cache permissions OK ($HF_CACHE)"
+    fi
+else
+    echo -e "${BLUE}ℹ${NC}  HF cache directory will be created at $HF_CACHE"
+fi
+echo ""
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Head Node Configuration
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

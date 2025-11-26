@@ -5,7 +5,6 @@ set -euo pipefail
 # vLLM Benchmark Script using vllm bench serve
 #
 # Uses the official vLLM benchmarking tool for consistent, reproducible results.
-# Based on eugr's benchmarking methodology from the NVIDIA forums.
 #
 # Usage:
 #   ./benchmark_current_vllm.sh [options]
@@ -287,6 +286,7 @@ BENCH_CMD="vllm bench serve \
   --dataset-name sharegpt \
   --dataset-path '${DATASET_PATH}' \
   --num-prompts ${NUM_PROMPTS} \
+  --max-concurrency ${MAX_CONCURRENCY} \
   --host ${API_HOST} \
   --port ${API_PORT} \
   ${OUTPUT_ARG}"
@@ -300,6 +300,7 @@ echo "      --endpoint /v1/completions \\"
 echo "      --dataset-name sharegpt \\"
 echo "      --dataset-path '${DATASET_PATH}' \\"
 echo "      --num-prompts ${NUM_PROMPTS} \\"
+echo "      --max-concurrency ${MAX_CONCURRENCY} \\"
 echo "      --host ${API_HOST} \\"
 echo "      --port ${API_PORT}"
 echo ""
@@ -329,45 +330,28 @@ fi
 print_header "Performance Analysis"
 
 # Extract key metrics from output
-OUTPUT_TPS=$(grep -E "Output token throughput" /tmp/benchmark_output.txt | head -1 | awk '{print $NF}' || echo "0")
-PEAK_TPS=$(grep -E "Peak output token throughput" /tmp/benchmark_output.txt | head -1 | awk '{print $NF}' || echo "0")
-MEAN_TTFT=$(grep -E "Mean TTFT" /tmp/benchmark_output.txt | head -1 | awk '{print $NF}' || echo "0")
-MEAN_TPOT=$(grep -E "Mean TPOT" /tmp/benchmark_output.txt | head -1 | awk '{print $NF}' || echo "0")
+OUTPUT_TPS=$(grep -E "Output token throughput" /tmp/benchmark_output.txt | head -1 | awk '{print $NF}' || echo "N/A")
+PEAK_TPS=$(grep -E "Peak output token throughput" /tmp/benchmark_output.txt | head -1 | awk '{print $NF}' || echo "N/A")
+TOTAL_TPS=$(grep -E "Total Token throughput" /tmp/benchmark_output.txt | head -1 | awk '{print $NF}' || echo "N/A")
+REQ_THROUGHPUT=$(grep -E "Request throughput" /tmp/benchmark_output.txt | head -1 | awk '{print $NF}' || echo "N/A")
+MEAN_TTFT=$(grep -E "Mean TTFT" /tmp/benchmark_output.txt | head -1 | awk '{print $NF}' || echo "N/A")
+MEAN_TPOT=$(grep -E "Mean TPOT" /tmp/benchmark_output.txt | head -1 | awk '{print $NF}' || echo "N/A")
 
 echo ""
 echo -e "  ${BOLD}Key Metrics:${NC}"
 echo -e "    Output Throughput:     ${GREEN}${OUTPUT_TPS}${NC} tokens/sec"
-echo -e "    Peak Throughput:       ${GREEN}${PEAK_TPS}${NC} tokens/sec"
+if [ "$PEAK_TPS" != "N/A" ]; then
+  echo -e "    Peak Throughput:       ${GREEN}${PEAK_TPS}${NC} tokens/sec"
+fi
+echo -e "    Total Throughput:      ${TOTAL_TPS} tokens/sec (input + output)"
+echo -e "    Request Throughput:    ${REQ_THROUGHPUT} req/sec"
 echo -e "    Mean TTFT:             ${MEAN_TTFT} ms"
 echo -e "    Mean TPOT:             ${MEAN_TPOT} ms"
 echo ""
 
-# Performance assessment based on single-request throughput
-if [ "$SINGLE_MODE" = true ]; then
-  # For single request, compare against expected single-request performance
-  TPS_NUM=$(echo "${OUTPUT_TPS}" | tr -d '[:alpha:]')
-  if [ -n "$TPS_NUM" ] && [ "$(echo "$TPS_NUM > 0" | bc -l 2>/dev/null || echo 0)" = "1" ]; then
-    if (( $(echo "$TPS_NUM < 30" | bc -l) )); then
-      echo -e "  ${RED}⚠ Low single-request throughput (<30 t/s)${NC}"
-      echo -e "    This may indicate:"
-      echo -e "    - NCCL using Socket instead of InfiniBand"
-      echo -e "    - Run: ./diagnose_nccl.sh --container"
-    elif (( $(echo "$TPS_NUM >= 70" | bc -l) )); then
-      echo -e "  ${GREEN}✓ Excellent single-request throughput!${NC}"
-      echo -e "    InfiniBand/RoCE appears to be working correctly."
-    else
-      echo -e "  ${GREEN}✓ Good single-request throughput${NC}"
-    fi
-  fi
-else
-  # For batch benchmarks, show comparison
-  echo -e "  ${BOLD}Reference (Qwen3-30B-A3B, dual Spark):${NC}"
-  echo -e "    Ethernet (Socket):     ~56 t/s single, ~410 t/s batch"
-  echo -e "    InfiniBand (RDMA):     ~76 t/s single, ~707 t/s batch"
-  echo ""
-  echo -e "  ${BOLD}Diagnostic:${NC}"
-  echo -e "    If throughput is below expected, run: ./diagnose_nccl.sh --container"
-fi
+# Diagnostic tip
+echo -e "  ${BOLD}Diagnostic:${NC}"
+echo -e "    To verify NCCL is using InfiniBand/RoCE: ./diagnose_nccl.sh --container"
 
 echo ""
 

@@ -12,6 +12,13 @@ HF_CACHE="${HF_CACHE:-/raid/hf-cache}"
 HF_TOKEN="${HF_TOKEN:-}"  # Set via: export HF_TOKEN=hf_xxx
 RAY_VERSION="${RAY_VERSION:-2.52.0}"
 
+# Worker node configuration (for orchestrated setup)
+# Set WORKER_HOST to enable automatic worker setup from head node
+WORKER_HOST="${WORKER_HOST:-192.168.7.111}"  # Default to second DGX Spark
+WORKER_USER="${WORKER_USER:-$(whoami)}"
+WORKER_HF_CACHE="${WORKER_HF_CACHE:-${HF_CACHE}}"  # Worker's HF cache path (same as head by default)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Model configuration
 MODEL="${MODEL:-openai/gpt-oss-120b}"
 TENSOR_PARALLEL="${TENSOR_PARALLEL:-2}"  # Default to 2 for distributed inference
@@ -137,6 +144,18 @@ log "  Model:           ${MODEL}"
 log "  Tensor Parallel: ${TENSOR_PARALLEL}"
 log "  Ray Version:     ${RAY_VERSION}"
 log ""
+if [ -n "${WORKER_HOST}" ]; then
+  log "Worker Node Configuration (orchestrated setup enabled):"
+  log "  Worker Host:     ${WORKER_HOST}"
+  log "  Worker User:     ${WORKER_USER}"
+  log "  Worker HF Cache: ${WORKER_HF_CACHE}"
+  log ""
+else
+  log "Worker Node Configuration:"
+  log "  ⚠️  WORKER_HOST not set - manual worker setup required"
+  log "     Set WORKER_HOST=<ip> to enable automatic worker orchestration"
+  log ""
+fi
 log "Network Configuration (auto-detected from ibdev2netdev):"
 log "  Primary IB IF:   ${PRIMARY_IB_IF:-<not detected>}"
 log "  GLOO Interface:  ${GLOO_IF}"
@@ -155,14 +174,27 @@ log ""
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-log "Step 1/10: Pulling Docker image"
+# Calculate total steps based on whether worker orchestration is enabled
+if [ -n "${WORKER_HOST}" ]; then
+  TOTAL_STEPS=13
+else
+  TOTAL_STEPS=10
+fi
+STEP=0
+
+next_step() {
+  STEP=$((STEP + 1))
+  echo "${STEP}/${TOTAL_STEPS}"
+}
+
+log "Step $(next_step): Pulling Docker image"
 if ! docker pull "${IMAGE}"; then
   error "Failed to pull image ${IMAGE}"
 fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-log "Step 2/10: Cleaning old container"
+log "Step $(next_step): Cleaning old container"
 if docker ps -a --format '{{.Names}}' | grep -qx "${NAME}"; then
   log "  Removing existing container: ${NAME}"
   docker rm -f "${NAME}" >/dev/null
@@ -170,7 +202,7 @@ fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-log "Step 3/10: Starting head container"
+log "Step $(next_step): Starting head container"
 
 # Build environment variable args for IB/NCCL configuration
 # These are passed into the container to ensure NCCL uses the IB/RoCE link
@@ -204,6 +236,8 @@ if [ -n "${HF_TOKEN}" ]; then
   ENV_ARGS+=(-e HF_TOKEN="${HF_TOKEN}")
 fi
 
+# Run container as root (required for NVIDIA/vLLM)
+# HF cache is mounted to /root/.cache/huggingface
 docker run -d \
   --restart unless-stopped \
   --name "${NAME}" \
@@ -225,7 +259,7 @@ log "  Container started successfully"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-log "Step 4/10: Installing RDMA/InfiniBand libraries for NCCL"
+log "Step $(next_step): Installing RDMA/InfiniBand libraries for NCCL"
 log "  These libraries are required for NCCL to use InfiniBand/RoCE instead of Ethernet"
 if ! docker exec "${NAME}" bash -lc "
   apt-get update -qq >/dev/null 2>&1
@@ -250,7 +284,7 @@ fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-log "Step 5/10: Installing Ray ${RAY_VERSION}"
+log "Step $(next_step): Installing Ray ${RAY_VERSION}"
 if ! docker exec "${NAME}" bash -lc "pip install -q -U --root-user-action=ignore 'ray==${RAY_VERSION}'"; then
   error "Failed to install Ray"
 fi
@@ -265,7 +299,7 @@ log "  Ray ${INSTALLED_RAY_VERSION} installed"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-log "Step 6/10: Pre-downloading model weights"
+log "Step $(next_step): Pre-downloading model weights"
 log "  Model: ${MODEL}"
 log "  This may take a while for large models on first download..."
 
@@ -303,8 +337,76 @@ fi
 log "  Model download complete and verified"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Worker orchestration steps (only if WORKER_HOST is set)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-log "Step 7/10: Starting Ray head"
+if [ -n "${WORKER_HOST}" ]; then
+  log "Step $(next_step): Syncing model to worker node"
+  log "  Worker host: ${WORKER_USER}@${WORKER_HOST}"
+  log "  Source: ${HF_CACHE}/"
+  log "  Destination: ${WORKER_HF_CACHE}/"
+  log ""
+  log "  This may take a while for large models..."
+
+  # Test SSH connectivity first
+  if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "${WORKER_USER}@${WORKER_HOST}" "echo 'SSH OK'" >/dev/null 2>&1; then
+    error "Cannot SSH to ${WORKER_USER}@${WORKER_HOST}. Please ensure:"$'\n'"  1. SSH keys are set up (ssh-copy-id ${WORKER_USER}@${WORKER_HOST})"$'\n'"  2. The worker host is reachable"
+  fi
+  log "  ✅ SSH connectivity verified"
+
+  # Ensure destination directory exists and fix permissions if needed
+  ssh "${WORKER_USER}@${WORKER_HOST}" "
+    mkdir -p ${WORKER_HF_CACHE}/hub
+    # Fix ownership if directories exist but are owned by root (from Docker)
+    if [ -d '${WORKER_HF_CACHE}' ] && [ ! -w '${WORKER_HF_CACHE}' ]; then
+      echo 'Fixing permissions on ${WORKER_HF_CACHE} (requires sudo)...'
+      sudo chown -R \$(id -u):\$(id -g) '${WORKER_HF_CACHE}' 2>/dev/null || true
+    fi
+  "
+
+  # Convert model name to HF cache directory format (e.g., openai/gpt-oss-120b -> models--openai--gpt-oss-120b)
+  MODEL_CACHE_NAME="models--$(echo "${MODEL}" | sed 's|/|--|g')"
+  MODEL_CACHE_PATH="${HF_CACHE}/hub/${MODEL_CACHE_NAME}"
+
+  if [ ! -d "${MODEL_CACHE_PATH}" ]; then
+    error "Model cache not found at ${MODEL_CACHE_PATH}. Download the model first."
+  fi
+
+  log "  Syncing model: ${MODEL_CACHE_NAME}"
+  log "  From: ${MODEL_CACHE_PATH}"
+  log "  To:   ${WORKER_USER}@${WORKER_HOST}:${WORKER_HF_CACHE}/hub/"
+
+  # Rsync only the specific model directory (exclude lock files)
+  # Use --no-perms --no-owner --no-group to avoid permission issues with mixed ownership
+  if ! rsync -a --info=progress2 --human-readable \
+    --no-perms --no-owner --no-group \
+    --exclude='.locks' \
+    --exclude='*.lock' \
+    "${MODEL_CACHE_PATH}" \
+    "${WORKER_USER}@${WORKER_HOST}:${WORKER_HF_CACHE}/hub/"; then
+    error "Failed to rsync model to worker node"
+  fi
+  log "  ✅ Model synced to worker"
+
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  log "Step $(next_step): Copying worker script to worker node"
+  WORKER_SCRIPT="${SCRIPT_DIR}/start_worker_vllm.sh"
+
+  if [ ! -f "${WORKER_SCRIPT}" ]; then
+    error "Worker script not found at ${WORKER_SCRIPT}"
+  fi
+
+  # Copy the worker script to the worker's home directory
+  if ! scp "${WORKER_SCRIPT}" "${WORKER_USER}@${WORKER_HOST}:~/start_worker_vllm.sh"; then
+    error "Failed to copy worker script to ${WORKER_HOST}"
+  fi
+  log "  ✅ Worker script copied to ${WORKER_USER}@${WORKER_HOST}:~/start_worker_vllm.sh"
+fi
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+log "Step $(next_step): Starting Ray head"
 docker exec "${NAME}" bash -lc "
   ray stop --force 2>/dev/null || true
   ray start --head \
@@ -330,45 +432,103 @@ done
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-log "Step 8/10: Waiting for worker nodes"
-log ""
-log "  ⚠️  IMPORTANT: Before proceeding, ensure all worker nodes have:"
-log "     1. Downloaded the model: export MODEL=${MODEL} && bash start_worker_vllm.sh"
-log "     2. Joined the Ray cluster"
-log ""
-log "  Checking Ray cluster status..."
-
-# Show current cluster status
-docker exec "${NAME}" bash -lc "ray status --address=127.0.0.1:6380 2>/dev/null | head -15" || true
-
-CURRENT_NODES=$(docker exec "${NAME}" bash -lc "ray status --address=127.0.0.1:6380 2>/dev/null | grep -E '^ [0-9]+ node' | awk '{print \$1}'" 2>/dev/null || echo "1")
-CURRENT_GPUS=$(docker exec "${NAME}" bash -lc "ray status --address=127.0.0.1:6380 2>/dev/null | grep 'GPU:' | awk -F'/' '{print \$2}' | awk '{print \$1}'" 2>/dev/null || echo "1")
-
-log ""
-log "  Current cluster: ${CURRENT_NODES} node(s), ${CURRENT_GPUS} GPU(s)"
-
-if [ "${TENSOR_PARALLEL}" -gt "${CURRENT_GPUS:-1}" ]; then
+if [ -n "${WORKER_HOST}" ]; then
+  # Orchestrated mode: Start worker via SSH
+  log "Step $(next_step): Starting worker node via SSH"
+  log "  Starting worker script on ${WORKER_USER}@${WORKER_HOST}..."
   log ""
-  log "  ⚠️  Warning: tensor-parallel-size (${TENSOR_PARALLEL}) > available GPUs (${CURRENT_GPUS})"
-  log "     Waiting 30 seconds for worker nodes to join..."
-  log "     (Press Ctrl+C to abort and add workers manually)"
 
-  for i in {1..30}; do
+  # Build environment variables to pass to worker
+  # Worker needs HEAD_IP, MODEL, HF_TOKEN, and HF_CACHE
+  WORKER_ENV="HEAD_IP=${HEAD_IP} MODEL=${MODEL} HF_CACHE=${WORKER_HF_CACHE} RAY_VERSION=${RAY_VERSION} SKIP_MODEL_DOWNLOAD=1"
+  if [ -n "${HF_TOKEN}" ]; then
+    WORKER_ENV="${WORKER_ENV} HF_TOKEN=${HF_TOKEN}"
+  fi
+
+  # Start the worker script via SSH (run in background)
+  # Use ssh -f with nohup to properly detach the process
+  # The sleep 1 at the end ensures SSH doesn't exit before nohup takes over
+  ssh -f "${WORKER_USER}@${WORKER_HOST}" "nohup bash -c '${WORKER_ENV} bash ~/start_worker_vllm.sh > ~/worker_setup.log 2>&1' </dev/null >/dev/null 2>&1 &"
+
+  # Give SSH a moment to start the remote process
+  sleep 2
+
+  log "  Worker script started in background on ${WORKER_HOST}"
+  log "  Logs available at: ${WORKER_USER}@${WORKER_HOST}:~/worker_setup.log"
+  log ""
+
+  # Wait for worker to join the cluster (check for 2+ nodes)
+  log "  Waiting for worker to join Ray cluster..."
+  WORKER_JOINED=false
+  for i in {1..120}; do
+    NODE_COUNT=$(docker exec "${NAME}" bash -lc "ray status --address=127.0.0.1:6380 2>/dev/null | grep -E '^ [0-9]+ node_' | wc -l" 2>/dev/null || echo "0")
     CURRENT_GPUS=$(docker exec "${NAME}" bash -lc "ray status --address=127.0.0.1:6380 2>/dev/null | grep 'GPU:' | awk -F'/' '{print \$2}' | awk '{print \$1}'" 2>/dev/null || echo "1")
-    if [ "${CURRENT_GPUS:-1}" -ge "${TENSOR_PARALLEL}" ]; then
-      log "  ✅ Sufficient GPUs available: ${CURRENT_GPUS}"
+
+    if [ "${NODE_COUNT}" -ge 2 ]; then
+      echo ""
+      log "  ✅ Worker joined cluster (${i}s) - ${NODE_COUNT} nodes, ${CURRENT_GPUS} GPUs"
+      WORKER_JOINED=true
       break
     fi
-    if [ $i -eq 30 ]; then
-      log "  ⚠️  Proceeding with ${CURRENT_GPUS} GPU(s) - vLLM may fail if insufficient"
-    fi
+
+    # Show spinner
+    SPINNER="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    SPIN_CHAR="${SPINNER:$((i % 10)):1}"
+    printf "\r  %s Waiting for worker... [%ds elapsed, %s nodes]  " "${SPIN_CHAR}" "${i}" "${NODE_COUNT}"
+
     sleep 1
   done
+
+  if [ "${WORKER_JOINED}" != "true" ]; then
+    echo ""
+    log "  ⚠️  Worker did not join cluster within 120s"
+    log "     Check worker logs: ssh ${WORKER_USER}@${WORKER_HOST} 'cat ~/worker_setup.log'"
+    log ""
+    log "  Proceeding anyway - vLLM may fail if insufficient GPUs"
+  fi
+
+else
+  # Manual mode: Wait for user to start workers
+  log "Step $(next_step): Waiting for worker nodes"
+  log ""
+  log "  ⚠️  IMPORTANT: Before proceeding, ensure all worker nodes have:"
+  log "     1. Downloaded the model: export MODEL=${MODEL} && bash start_worker_vllm.sh"
+  log "     2. Joined the Ray cluster"
+  log ""
+  log "  Checking Ray cluster status..."
+
+  # Show current cluster status
+  docker exec "${NAME}" bash -lc "ray status --address=127.0.0.1:6380 2>/dev/null | head -15" || true
+
+  CURRENT_NODES=$(docker exec "${NAME}" bash -lc "ray status --address=127.0.0.1:6380 2>/dev/null | grep -E '^ [0-9]+ node' | awk '{print \$1}'" 2>/dev/null || echo "1")
+  CURRENT_GPUS=$(docker exec "${NAME}" bash -lc "ray status --address=127.0.0.1:6380 2>/dev/null | grep 'GPU:' | awk -F'/' '{print \$2}' | awk '{print \$1}'" 2>/dev/null || echo "1")
+
+  log ""
+  log "  Current cluster: ${CURRENT_NODES} node(s), ${CURRENT_GPUS} GPU(s)"
+
+  if [ "${TENSOR_PARALLEL}" -gt "${CURRENT_GPUS:-1}" ]; then
+    log ""
+    log "  ⚠️  Warning: tensor-parallel-size (${TENSOR_PARALLEL}) > available GPUs (${CURRENT_GPUS})"
+    log "     Waiting 30 seconds for worker nodes to join..."
+    log "     (Press Ctrl+C to abort and add workers manually)"
+
+    for i in {1..30}; do
+      CURRENT_GPUS=$(docker exec "${NAME}" bash -lc "ray status --address=127.0.0.1:6380 2>/dev/null | grep 'GPU:' | awk -F'/' '{print \$2}' | awk '{print \$1}'" 2>/dev/null || echo "1")
+      if [ "${CURRENT_GPUS:-1}" -ge "${TENSOR_PARALLEL}" ]; then
+        log "  ✅ Sufficient GPUs available: ${CURRENT_GPUS}"
+        break
+      fi
+      if [ $i -eq 30 ]; then
+        log "  ⚠️  Proceeding with ${CURRENT_GPUS} GPU(s) - vLLM may fail if insufficient"
+      fi
+      sleep 1
+    done
+  fi
 fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-log "Step 9/10: Starting vLLM server"
+log "Step $(next_step): Starting vLLM server"
 log ""
 
 # Kill any existing vLLM processes
@@ -384,6 +544,7 @@ docker exec "${NAME}" bash -lc "
   export RAY_ADDRESS=127.0.0.1:6380
   export PYTHONUNBUFFERED=1
   export VLLM_LOGGING_LEVEL=INFO
+  export VLLM_MXFP4_USE_MARLIN=1
 
   nohup vllm serve ${MODEL} \
     --distributed-executor-backend ray \
@@ -392,6 +553,8 @@ docker exec "${NAME}" bash -lc "
     --tensor-parallel-size ${TENSOR_PARALLEL} \
     --max-model-len ${MAX_MODEL_LEN} \
     --gpu-memory-utilization ${GPU_MEMORY_UTIL} \
+    --swap-space 16 \
+    --enable-expert-parallel \
     --download-dir \$HF_HOME \
     > /var/log/vllm.log 2>&1 &
 
@@ -502,7 +665,7 @@ log ""
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-log "Step 10/10: Running health checks"
+log "Step $(next_step): Running health checks"
 
 # Check Ray status
 RAY_NODES=$(docker exec "${NAME}" bash -lc "ray status --address=127.0.0.1:6380 2>/dev/null | grep 'Healthy:' -A1 | tail -1 | awk '{print \$1}'" || echo "0")
@@ -522,21 +685,41 @@ fi
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "✅ Head node is ready!"
+if [ -n "${WORKER_HOST}" ]; then
+  echo "✅ Cluster is ready! (Head + Worker orchestrated)"
+else
+  echo "✅ Head node is ready!"
+fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "🌐 Services (accessible from network):"
 echo "  Ray Dashboard:  http://${PUBLIC_IP}:8265"
 echo "  vLLM API:       http://${PUBLIC_IP}:8000"
 echo ""
-echo "🔗 Next Steps - Add Worker Nodes:"
-echo "  1. SSH to each worker node"
-echo "  2. Run: export HEAD_IP=${HEAD_IP}"
-echo "  3. Run: bash start_worker_vllm.sh"
-echo ""
-echo "  Note: Workers use IB/RoCE IP (${HEAD_IP}) for cluster communication"
-echo "  Note: Worker IPs and network interfaces will be auto-detected!"
-echo ""
+
+if [ -n "${WORKER_HOST}" ]; then
+  echo "🖥️  Cluster Nodes:"
+  echo "  Head:   $(hostname) (${HEAD_IP})"
+  echo "  Worker: ${WORKER_HOST}"
+  echo ""
+  echo "🔧 Worker Logs:"
+  echo "  ssh ${WORKER_USER}@${WORKER_HOST} 'cat ~/worker_setup.log'"
+  echo ""
+else
+  echo "🔗 Next Steps - Add Worker Nodes:"
+  echo "  1. SSH to each worker node"
+  echo "  2. Run: export HEAD_IP=${HEAD_IP}"
+  echo "  3. Run: bash start_worker_vllm.sh"
+  echo ""
+  echo "  Note: Workers use IB/RoCE IP (${HEAD_IP}) for cluster communication"
+  echo "  Note: Worker IPs and network interfaces will be auto-detected!"
+  echo ""
+  echo "  For orchestrated setup (single command), set WORKER_HOST:"
+  echo "    export WORKER_HOST=<worker_ip>"
+  echo "    bash start_head_vllm.sh"
+  echo ""
+fi
+
 echo "📊 Quick API Tests:"
 echo "  # List models"
 echo "  curl http://${PUBLIC_IP}:8000/v1/models"
