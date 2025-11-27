@@ -5,12 +5,15 @@
 #
 # With auto-detection enabled in the scripts, you only need to set:
 # - HF_TOKEN (for gated models like Llama)
-# - HEAD_IP (for worker nodes only)
+# - WORKER_HOST (worker's Ethernet IP for SSH/rsync from head node)
+#
+# For manual worker setup (not orchestrated from head):
+# - HEAD_IP (head node's InfiniBand IP)
 #
 # Usage:
 #   source ./setup-env.sh           # Interactive mode
 #   source ./setup-env.sh --head    # Head node mode
-#   source ./setup-env.sh --worker  # Worker node mode
+#   source ./setup-env.sh --worker  # Worker node mode (manual setup only)
 #
 # NOTE: This script must be sourced (not executed) to set environment variables
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -155,6 +158,13 @@ if [[ "$NODE_TYPE" == "head" ]] || [[ "$NODE_TYPE" == "interactive" ]]; then
     prompt_input "HF_TOKEN" "Enter your HuggingFace token" "" true
     echo ""
 
+    # Worker node Ethernet IP (required for orchestrated setup)
+    echo "Worker Node IP (required for multi-node setup):"
+    echo "  This is the worker's standard Ethernet IP for SSH/rsync"
+    echo "  Example: 192.168.7.111"
+    prompt_input "WORKER_HOST" "Enter worker node Ethernet IP" ""
+    echo ""
+
     # Optional model configuration
     echo -e "${BLUE}Optional Configuration (press Enter to use defaults):${NC}"
     prompt_input "MODEL" "Model to serve" "openai/gpt-oss-120b"
@@ -165,17 +175,22 @@ if [[ "$NODE_TYPE" == "head" ]] || [[ "$NODE_TYPE" == "interactive" ]]; then
 fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Worker Node Configuration
+# Worker Node Configuration (only needed for manual worker setup)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-if [[ "$NODE_TYPE" == "worker" ]] || [[ "$NODE_TYPE" == "interactive" ]]; then
+if [[ "$NODE_TYPE" == "worker" ]]; then
     echo -e "${BLUE}Worker Node Settings:${NC}"
     echo ""
+    echo "Note: If running the worker from the head node (orchestrated setup),"
+    echo "      HEAD_IP is automatically passed via SSH. Only set this if"
+    echo "      you're starting the worker manually."
+    echo ""
 
-    # HEAD_IP (required for workers)
-    echo "Head Node IP (required):"
-    echo "  This should be the InfiniBand IP from your head node"
-    echo "  Example: 169.254.x.x"
+    # HEAD_IP (required for manual worker setup)
+    echo "Head Node InfiniBand IP (required for manual worker setup):"
+    echo "  Run 'ibdev2netdev' on the head node to find its IB interface,"
+    echo "  then 'ip addr show <interface>' to get the IP"
+    echo "  Example: 169.254.103.56"
     prompt_input "HEAD_IP" "Enter head node InfiniBand IP" ""
     echo ""
 fi
@@ -193,20 +208,21 @@ echo ""
 
 if [[ "$NODE_TYPE" == "head" ]] || [[ "$NODE_TYPE" == "interactive" ]]; then
     [ -n "${HF_TOKEN:-}" ] && echo "  ✓ HF_TOKEN (hidden)"
+    [ -n "${WORKER_HOST:-}" ] && echo "  ✓ WORKER_HOST=$WORKER_HOST"
     [ -n "${MODEL:-}" ] && echo "  ✓ MODEL=$MODEL"
     [ -n "${TENSOR_PARALLEL:-}" ] && echo "  ✓ TENSOR_PARALLEL=$TENSOR_PARALLEL"
     [ -n "${MAX_MODEL_LEN:-}" ] && echo "  ✓ MAX_MODEL_LEN=$MAX_MODEL_LEN"
     [ -n "${GPU_MEMORY_UTIL:-}" ] && echo "  ✓ GPU_MEMORY_UTIL=$GPU_MEMORY_UTIL"
 fi
 
-if [[ "$NODE_TYPE" == "worker" ]] || [[ "$NODE_TYPE" == "interactive" ]]; then
+if [[ "$NODE_TYPE" == "worker" ]]; then
     [ -n "${HEAD_IP:-}" ] && echo "  ✓ HEAD_IP=$HEAD_IP"
 fi
 
 echo ""
 echo "Auto-detected by scripts (no configuration needed):"
-echo "  ✓ HEAD_IP (head node only) - detected from InfiniBand"
-echo "  ✓ WORKER_IP - detected from InfiniBand"
+echo "  ✓ HEAD_IP - detected from InfiniBand on head node"
+echo "  ✓ WORKER_IP - detected from InfiniBand on worker node"
 echo "  ✓ Network interfaces (GLOO_IF, TP_IF, NCCL_IF, UCX_DEV)"
 echo "  ✓ InfiniBand HCAs (NCCL_IB_HCA)"
 echo ""
