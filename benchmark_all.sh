@@ -100,6 +100,38 @@ check_hf_token() {
   [ -n "${HF_TOKEN:-}" ]
 }
 
+# Wait for API with progress updates
+wait_for_api() {
+  local timeout=$1
+  local elapsed=0
+  local last_log=""
+
+  echo "  Waiting for API (timeout: ${timeout}s)..."
+
+  while [ $elapsed -lt $timeout ]; do
+    if curl -sf "http://localhost:8000/health" >/dev/null 2>&1; then
+      echo "  API ready after ${elapsed}s"
+      return 0
+    fi
+
+    # Show progress every 30 seconds with latest container log
+    if [ $((elapsed % 30)) -eq 0 ] && [ $elapsed -gt 0 ]; then
+      if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "ray-head"; then
+        last_log=$(docker logs --tail 5 ray-head 2>&1 | grep -v "^$" | grep -v "HTTP/1.1" | tail -1 || echo "Loading...")
+        echo "  [${elapsed}s] ${last_log:0:80}"
+      else
+        echo "  [${elapsed}s] Waiting for container..."
+      fi
+    fi
+
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+
+  echo "  Timeout after ${timeout}s"
+  return 1
+}
+
 usage() {
   cat << EOF
 Usage: $0 [OPTIONS]
@@ -326,18 +358,9 @@ for idx in "${MODELS_TO_BENCHMARK[@]}"; do
     continue
   fi
 
-  # Wait for API to be ready
+  # Wait for API to be ready (300s timeout = 5 minutes)
   log "Waiting for API..."
-  API_READY=false
-  for i in {1..60}; do
-    if curl -sf "http://localhost:8000/health" >/dev/null 2>&1; then
-      API_READY=true
-      break
-    fi
-    sleep 5
-  done
-
-  if [ "${API_READY}" != "true" ]; then
+  if ! wait_for_api 300; then
     log "FAILED: API not ready for ${MODEL_NAME}"
     echo "${MODEL_NAME},${MODEL_NODES[$idx]},N/A,N/A,N/A,N/A,API_TIMEOUT" >> "${CSV_FILE}"
     FAILED=$((FAILED + 1))
