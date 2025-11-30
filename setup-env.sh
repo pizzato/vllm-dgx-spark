@@ -117,31 +117,49 @@ echo ""
 HF_CACHE="${HF_CACHE:-/raid/hf-cache}"
 echo -e "${YELLOW}Checking HuggingFace cache permissions...${NC}"
 
-# Check if HF cache exists and fix permissions if needed
-if [ -d "$HF_CACHE" ]; then
-    if [ ! -w "$HF_CACHE" ]; then
-        echo -e "${RED}⚠${NC}  HF cache at $HF_CACHE is not writable by current user"
-        echo "   Docker containers run as root and may have created files owned by root."
+# Function to check and fix HF cache permissions (checks for root-owned files inside)
+check_fix_hf_cache() {
+    local cache_dir="$1"
+    local location="$2"  # "local" or remote host description
+
+    if [ ! -d "$cache_dir" ]; then
+        echo -e "${BLUE}ℹ${NC}  HF cache directory will be created at $cache_dir ($location)"
+        return 0
+    fi
+
+    # Check for root-owned files/directories (Docker creates these)
+    local root_owned=$(find "$cache_dir" -user root 2>/dev/null | head -5)
+
+    if [ -n "$root_owned" ]; then
+        echo -e "${RED}⚠${NC}  Found root-owned files in $cache_dir ($location)"
+        echo "   Docker containers run as root and create files owned by root."
+        echo "   This will cause rsync permission errors during model sync."
         echo ""
         echo -e "${YELLOW}To fix permissions, run:${NC}"
-        echo "   sudo chown -R \$USER $HF_CACHE"
+        echo "   sudo chown -R \$USER $cache_dir"
         echo ""
         read -p "Would you like to fix permissions now? (requires sudo) [y/N]: " fix_perms
         if [[ "$fix_perms" =~ ^[Yy]$ ]]; then
-            echo "Running: sudo chown -R $USER $HF_CACHE"
-            if sudo chown -R "$USER" "$HF_CACHE"; then
-                echo -e "${GREEN}✓${NC} Permissions fixed successfully"
+            echo "Running: sudo chown -R $USER $cache_dir"
+            if sudo chown -R "$USER" "$cache_dir"; then
+                echo -e "${GREEN}✓${NC} Permissions fixed successfully ($location)"
             else
                 echo -e "${RED}✗${NC} Failed to fix permissions. Please run manually:"
-                echo "   sudo chown -R \$USER $HF_CACHE"
+                echo "   sudo chown -R \$USER $cache_dir"
+                return 1
             fi
         fi
+    elif [ ! -w "$cache_dir" ]; then
+        echo -e "${RED}⚠${NC}  HF cache at $cache_dir is not writable ($location)"
+        return 1
     else
-        echo -e "${GREEN}✓${NC} HF cache permissions OK ($HF_CACHE)"
+        echo -e "${GREEN}✓${NC} HF cache permissions OK ($cache_dir) ($location)"
     fi
-else
-    echo -e "${BLUE}ℹ${NC}  HF cache directory will be created at $HF_CACHE"
-fi
+    return 0
+}
+
+# Check local HF cache
+check_fix_hf_cache "$HF_CACHE" "local"
 echo ""
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -178,6 +196,44 @@ if [[ "$NODE_TYPE" == "head" ]] || [[ "$NODE_TYPE" == "interactive" ]]; then
     prompt_input "MAX_MODEL_LEN" "Maximum context length (tokens)" "8192"
     prompt_input "GPU_MEMORY_UTIL" "GPU memory utilization (0.0-1.0)" "0.90"
     echo ""
+
+    # Check worker node HF cache permissions via SSH
+    if [ -n "$WORKER_HOST" ]; then
+        echo -e "${YELLOW}Checking worker node HF cache permissions...${NC}"
+        WORKER_USER="${WORKER_USER:-$(whoami)}"
+
+        # Check SSH connectivity first
+        if ssh -o ConnectTimeout=5 -o BatchMode=yes "${WORKER_USER}@${WORKER_HOST}" "exit" 2>/dev/null; then
+            # Check for root-owned files on worker
+            root_owned=$(ssh "${WORKER_USER}@${WORKER_HOST}" "find $HF_CACHE -user root 2>/dev/null | head -5" 2>/dev/null)
+
+            if [ -n "$root_owned" ]; then
+                echo -e "${RED}⚠${NC}  Found root-owned files in $HF_CACHE on worker ($WORKER_HOST)"
+                echo "   Docker containers run as root and create files owned by root."
+                echo "   This will cause rsync permission errors during model sync."
+                echo ""
+                echo -e "${YELLOW}To fix, run this on the worker node:${NC}"
+                echo "   sudo chown -R \$USER $HF_CACHE"
+                echo ""
+                read -p "Would you like to fix worker permissions now? (requires sudo on worker) [y/N]: " fix_worker_perms
+                if [[ "$fix_worker_perms" =~ ^[Yy]$ ]]; then
+                    echo "Running on worker: sudo chown -R $WORKER_USER $HF_CACHE"
+                    if ssh -t "${WORKER_USER}@${WORKER_HOST}" "sudo chown -R $WORKER_USER $HF_CACHE" 2>/dev/null; then
+                        echo -e "${GREEN}✓${NC} Worker permissions fixed successfully"
+                    else
+                        echo -e "${RED}✗${NC} Failed to fix worker permissions. Please run manually on worker:"
+                        echo "   sudo chown -R \$USER $HF_CACHE"
+                    fi
+                fi
+            else
+                echo -e "${GREEN}✓${NC} Worker HF cache permissions OK ($HF_CACHE on $WORKER_HOST)"
+            fi
+        else
+            echo -e "${YELLOW}⚠${NC}  Cannot SSH to worker ($WORKER_HOST) - skipping permission check"
+            echo "   Make sure SSH keys are set up for passwordless access"
+        fi
+        echo ""
+    fi
 fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
