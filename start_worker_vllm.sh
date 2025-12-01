@@ -276,24 +276,11 @@ log "  Container started successfully"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-log "Step 5/8: Installing RDMA/InfiniBand libraries for NCCL"
+log "Step 5/8: Verifying RDMA/InfiniBand libraries for NCCL"
 log "  These libraries are required for NCCL to use InfiniBand/RoCE instead of Ethernet"
-if ! docker exec "${WORKER_NAME}" bash -lc "
-  apt-get update -qq >/dev/null 2>&1
-  apt-get install -y -qq \
-    infiniband-diags \
-    libibverbs1 \
-    librdmacm1 \
-    rdma-core \
-    ibverbs-providers \
-    >/dev/null 2>&1
-"; then
-  log "  ⚠️  Warning: Could not install RDMA libraries (may already be present)"
-fi
-
-# Verify RDMA libraries are available
+# The spark-vllm container already has RDMA libraries installed - just verify
 if docker exec "${WORKER_NAME}" bash -lc "ldconfig -p 2>/dev/null | grep -q libibverbs"; then
-  log "  ✅ RDMA libraries installed (libibverbs, librdmacm)"
+  log "  ✅ RDMA libraries available (libibverbs, librdmacm)"
 else
   log "  ⚠️  Warning: RDMA libraries may not be properly installed"
   log "     NCCL may fall back to Socket transport (slower)"
@@ -301,18 +288,23 @@ fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-log "Step 6/8: Installing Ray ${RAY_VERSION}"
-if ! docker exec "${WORKER_NAME}" bash -lc "pip install -q -U --root-user-action=ignore 'ray==${RAY_VERSION}'"; then
-  error "Failed to install Ray"
-fi
+log "Step 6/8: Verifying container has required dependencies"
+# The spark-vllm container already has Ray, vLLM, and fastsafetensors properly built for CUDA 13
+# Do NOT pip install anything here as it would overwrite the custom builds
 
-# Verify Ray version
+# Verify Ray is available
 INSTALLED_RAY_VERSION=$(docker exec "${WORKER_NAME}" python3 -c "import ray; print(ray.__version__)" 2>/dev/null || echo "unknown")
-if [ "${INSTALLED_RAY_VERSION}" != "${RAY_VERSION}" ]; then
-  error "Ray version mismatch: expected ${RAY_VERSION}, got ${INSTALLED_RAY_VERSION}"
+if [ "${INSTALLED_RAY_VERSION}" == "unknown" ]; then
+  error "Ray not found in container - ensure you're using the correct spark-vllm image"
 fi
+log "  Ray ${INSTALLED_RAY_VERSION} available"
 
-log "  Ray ${INSTALLED_RAY_VERSION} installed"
+# Verify CUDA is working
+CUDA_AVAILABLE=$(docker exec "${WORKER_NAME}" python3 -c "import torch; print(torch.cuda.is_available())" 2>/dev/null || echo "False")
+if [ "${CUDA_AVAILABLE}" != "True" ]; then
+  error "PyTorch CUDA not available - container may have incorrect PyTorch build"
+fi
+log "  PyTorch CUDA available"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
