@@ -244,7 +244,6 @@ docker run -d \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
   -e RAY_memory_usage_threshold=0.995 \
   -e HF_HOME=/root/.cache/huggingface \
-  -e FST_USE_GDS=0 \
   ${HF_TOKEN_ENV} \
   "${IMAGE}" sleep infinity
 
@@ -292,70 +291,6 @@ if [ "${INSTALLED_RAY_VERSION}" == "unknown" ]; then
   error "Ray not found in container"
 fi
 log "  ✅ Ray ${INSTALLED_RAY_VERSION} available"
-
-# Install only fastsafetensors if not already present (does not affect vLLM/PyTorch)
-if ! docker exec "${WORKER_NAME}" python3 -c "import fastsafetensors" 2>/dev/null; then
-  log "  Installing fastsafetensors..."
-  # Unset PIP_CONSTRAINT to avoid deprecation warning from nvidia container
-  docker exec "${WORKER_NAME}" bash -lc "unset PIP_CONSTRAINT && pip install -q --root-user-action=ignore fastsafetensors" || true
-fi
-log "  fastsafetensors available"
-
-# Apply fastsafetensors cluster patch (fixes device group handling in distributed setup)
-# See: https://github.com/foundation-model-stack/fastsafetensors/issues/36
-# The patch content is embedded here since this script runs on the worker node
-PATCH_CONTENT='diff --git a/vllm/model_executor/model_loader/weight_utils.py b/vllm/model_executor/model_loader/weight_utils.py
---- a/vllm/model_executor/model_loader/weight_utils.py
-+++ b/vllm/model_executor/model_loader/weight_utils.py
-@@ -28,6 +28,7 @@ from vllm import envs
- from vllm.config import ModelConfig
- from vllm.config.load import LoadConfig
- from vllm.distributed import get_tensor_model_parallel_rank
-+from vllm.distributed.parallel_state import get_world_group
- from vllm.logger import init_logger
- from vllm.model_executor.layers.quantization import (QuantizationConfig,
-                                                      get_quantization_config)
-@@ -647,11 +648,16 @@ def fastsafetensors_weights_iterator(
-     """Iterate over the weights in the model safetensor files
-     using fastsafetensor library."""
-     if torch.distributed.is_initialized():
--        pg = torch.distributed.group.WORLD
-+        world = get_world_group()
-+        pg = world.device_group
-+        device = world.device
-     else:
-         pg = SingleGroup()
-+        device = torch.device(f'"'"'cuda:{pg.rank()}'"'"')
-
--    device = torch.device(f"cuda:{pg.rank()}")
-+    # Disable GDS by default (use POSIX) unless FST_USE_GDS=1 is set
-+    # GDS requires special driver/filesystem support not available everywhere
-+    use_gds = os.environ.get('"'"'FST_USE_GDS'"'"', '"'"'0'"'"') == '"'"'1'"'"'
-     weight_files_sub_lists = [
-         hf_weights_files[i:i + pg.size()]
-         for i in range(0, len(hf_weights_files), pg.size())
-@@ -665,7 +671,7 @@ def fastsafetensors_weights_iterator(
-             disable=not enable_tqdm(use_tqdm_on_load),
-             bar_format=_BAR_FORMAT,
-     ):
--        loader = SafeTensorsFileLoader(pg, device)
-+        loader = SafeTensorsFileLoader(pg, device, nogds=not use_gds)
-         rank_file_map = {i: [f] for i, f in enumerate(f_list)}
-         loader.add_filenames(rank_file_map)
-         try:'
-
-log "  Applying fastsafetensors cluster patch..."
-if docker exec "${WORKER_NAME}" bash -c "
-  echo '${PATCH_CONTENT}' > /tmp/fastsafetensors.patch
-  cd /usr/local/lib/python3.12/dist-packages && \
-  patch -p1 --forward < /tmp/fastsafetensors.patch 2>/dev/null || \
-  patch -p1 --forward -d /opt/vllm < /tmp/fastsafetensors.patch 2>/dev/null || \
-  echo 'Patch may already be applied or path differs'
-"; then
-  log "  ✅ fastsafetensors cluster patch applied"
-else
-  log "  ⚠️  Could not apply fastsafetensors patch (may already be applied)"
-fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

@@ -39,9 +39,7 @@ SWAP_SPACE="${SWAP_SPACE:-16}"
 SHM_SIZE="${SHM_SIZE:-16g}"
 ENABLE_EXPERT_PARALLEL="${ENABLE_EXPERT_PARALLEL:-true}"
 TRUST_REMOTE_CODE="${TRUST_REMOTE_CODE:-false}"
-# Model loading format: safetensors (default) or fastsafetensors
-# fastsafetensors has a bug with multi-node setups (invalid device ordinal)
-# See: https://github.com/foundation-model-stack/fastsafetensors/issues/36
+# Model loading format (safetensors is recommended)
 LOAD_FORMAT="${LOAD_FORMAT:-safetensors}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
@@ -426,9 +424,6 @@ ENV_ARGS=(
   -e RAY_GCS_SERVER_PORT=6380
   # HuggingFace cache
   -e HF_HOME=/root/.cache/huggingface
-  # FST_USE_GDS controls fastsafetensors GDS mode (0=POSIX fallback, 1=GDS)
-  # Default is 0 (POSIX) since GDS requires special driver/filesystem support
-  -e FST_USE_GDS=0
 )
 
 # Add HuggingFace token if provided
@@ -496,35 +491,6 @@ if [ "${INSTALLED_RAY_VERSION}" == "unknown" ]; then
   error "Ray not found in container"
 fi
 log "  ✅ Ray ${INSTALLED_RAY_VERSION} available"
-
-# Install only fastsafetensors if not already present (does not affect vLLM/PyTorch)
-if ! docker exec "${NAME}" python3 -c "import fastsafetensors" 2>/dev/null; then
-  log "  Installing fastsafetensors..."
-  # Unset PIP_CONSTRAINT to avoid deprecation warning from nvidia container
-  docker exec "${NAME}" bash -lc "unset PIP_CONSTRAINT && pip install -q --root-user-action=ignore fastsafetensors" || true
-fi
-log "  fastsafetensors available (GPU Direct Storage for faster model loading)"
-
-# Apply fastsafetensors cluster patch (fixes device group handling in distributed setup)
-# See: https://github.com/foundation-model-stack/fastsafetensors/issues/36
-PATCH_FILE="${SCRIPT_DIR}/patches/fastsafetensors.patch"
-if [ -f "${PATCH_FILE}" ]; then
-  log "  Applying fastsafetensors cluster patch..."
-  # Copy patch into container and apply to vLLM's weight_utils.py
-  docker cp "${PATCH_FILE}" "${NAME}:/tmp/fastsafetensors.patch"
-  if docker exec "${NAME}" bash -lc "
-    cd /usr/local/lib/python3.12/dist-packages && \
-    patch -p1 --forward < /tmp/fastsafetensors.patch 2>/dev/null || \
-    patch -p1 --forward -d /opt/vllm < /tmp/fastsafetensors.patch 2>/dev/null || \
-    echo 'Patch may already be applied or path differs'
-  "; then
-    log "  ✅ fastsafetensors cluster patch applied"
-  else
-    log "  ⚠️  Could not apply fastsafetensors patch (may already be applied)"
-  fi
-else
-  log "  ⚠️  fastsafetensors patch not found at ${PATCH_FILE}"
-fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
