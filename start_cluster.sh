@@ -480,6 +480,27 @@ fi
 log "  Ray ${INSTALLED_RAY_VERSION} installed"
 log "  fastsafetensors installed (GPU Direct Storage for faster model loading)"
 
+# Apply fastsafetensors cluster patch (fixes device group handling in distributed setup)
+# See: https://github.com/foundation-model-stack/fastsafetensors/issues/36
+PATCH_FILE="${SCRIPT_DIR}/patches/fastsafetensors.patch"
+if [ -f "${PATCH_FILE}" ]; then
+  log "  Applying fastsafetensors cluster patch..."
+  # Copy patch into container and apply to vLLM's weight_utils.py
+  docker cp "${PATCH_FILE}" "${NAME}:/tmp/fastsafetensors.patch"
+  if docker exec "${NAME}" bash -lc "
+    cd /usr/local/lib/python3.12/dist-packages && \
+    patch -p1 --forward < /tmp/fastsafetensors.patch 2>/dev/null || \
+    patch -p1 --forward -d /opt/vllm < /tmp/fastsafetensors.patch 2>/dev/null || \
+    echo 'Patch may already be applied or path differs'
+  "; then
+    log "  ✅ fastsafetensors cluster patch applied"
+  else
+    log "  ⚠️  Could not apply fastsafetensors patch (may already be applied)"
+  fi
+else
+  log "  ⚠️  fastsafetensors patch not found at ${PATCH_FILE}"
+fi
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 log "Step 6/${TOTAL_STEPS}: Pre-downloading model weights"

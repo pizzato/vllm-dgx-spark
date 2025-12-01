@@ -267,9 +267,9 @@ fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-log "Step 6/8: Installing Ray ${RAY_VERSION}"
-if ! docker exec "${WORKER_NAME}" bash -lc "pip install -q -U --root-user-action=ignore 'ray==${RAY_VERSION}'"; then
-  error "Failed to install Ray"
+log "Step 6/8: Installing Ray ${RAY_VERSION} and applying patches"
+if ! docker exec "${WORKER_NAME}" bash -lc "pip install -q -U --root-user-action=ignore 'ray==${RAY_VERSION}' 'vllm[fastsafetensors]'"; then
+  error "Failed to install Ray and fastsafetensors"
 fi
 
 # Verify Ray version
@@ -279,6 +279,52 @@ if [ "${INSTALLED_RAY_VERSION}" != "${RAY_VERSION}" ]; then
 fi
 
 log "  Ray ${INSTALLED_RAY_VERSION} installed"
+log "  fastsafetensors installed"
+
+# Apply fastsafetensors cluster patch (fixes device group handling in distributed setup)
+# See: https://github.com/foundation-model-stack/fastsafetensors/issues/36
+# The patch content is embedded here since this script runs on the worker node
+PATCH_CONTENT='diff --git a/vllm/model_executor/model_loader/weight_utils.py b/vllm/model_executor/model_loader/weight_utils.py
+index 0809bdfa9..a7878f44f 100644
+--- a/vllm/model_executor/model_loader/weight_utils.py
++++ b/vllm/model_executor/model_loader/weight_utils.py
+@@ -28,6 +28,7 @@ from vllm import envs
+ from vllm.config import ModelConfig
+ from vllm.config.load import LoadConfig
+ from vllm.distributed import get_tensor_model_parallel_rank
++from vllm.distributed.parallel_state import get_world_group
+ from vllm.logger import init_logger
+ from vllm.model_executor.layers.quantization import (
+     QuantizationConfig,
+@@ -770,11 +771,13 @@ def fastsafetensors_weights_iterator(
+     """Iterate over the weights in the model safetensor files
+     using fastsafetensor library."""
+     if torch.distributed.is_initialized():
+-        pg = torch.distributed.group.WORLD
++        world = get_world_group()
++        pg = world.device_group
++        device = world.device
+     else:
+         pg = SingleGroup()
++        device = torch.device(f"cuda:{pg.rank()}")
+
+-    device = torch.device(f"cuda:{pg.rank()}")
+     weight_files_sub_lists = [
+         hf_weights_files[i : i + pg.size()]
+         for i in range(0, len(hf_weights_files), pg.size())'
+
+log "  Applying fastsafetensors cluster patch..."
+if docker exec "${WORKER_NAME}" bash -c "
+  echo '${PATCH_CONTENT}' > /tmp/fastsafetensors.patch
+  cd /usr/local/lib/python3.12/dist-packages && \
+  patch -p1 --forward < /tmp/fastsafetensors.patch 2>/dev/null || \
+  patch -p1 --forward -d /opt/vllm < /tmp/fastsafetensors.patch 2>/dev/null || \
+  echo 'Patch may already be applied or path differs'
+"; then
+  log "  ✅ fastsafetensors cluster patch applied"
+else
+  log "  ⚠️  Could not apply fastsafetensors patch (may already be applied)"
+fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
