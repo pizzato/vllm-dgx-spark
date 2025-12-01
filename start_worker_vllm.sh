@@ -226,6 +226,7 @@ docker run -d \
   --shm-size=16g \
   --ulimit memlock=-1 \
   --ulimit stack=67108864 \
+  --cap-add=SYS_NICE \
   --device=/dev/infiniband \
   -v "${HF_CACHE}:/root/.cache/huggingface" \
   -e VLLM_HOST_IP="${WORKER_IP}" \

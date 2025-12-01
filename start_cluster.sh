@@ -39,9 +39,9 @@ SWAP_SPACE="${SWAP_SPACE:-16}"
 SHM_SIZE="${SHM_SIZE:-16g}"
 ENABLE_EXPERT_PARALLEL="${ENABLE_EXPERT_PARALLEL:-true}"
 TRUST_REMOTE_CODE="${TRUST_REMOTE_CODE:-false}"
-# Note: fastsafetensors requires --cap-add=SYS_NICE for get_mempolicy syscall
-# Default to safetensors which works without special permissions
-LOAD_FORMAT="${LOAD_FORMAT:-safetensors}"
+# fastsafetensors uses GPU Direct Storage for faster model loading
+# Requires --cap-add=SYS_NICE (added to docker run command)
+LOAD_FORMAT="${LOAD_FORMAT:-fastsafetensors}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 # Ports
@@ -442,6 +442,7 @@ docker run -d \
   --shm-size="${SHM_SIZE}" \
   --ulimit memlock=-1 \
   --ulimit stack=67108864 \
+  --cap-add=SYS_NICE \
   --device=/dev/infiniband \
   -v "${HF_CACHE}:/root/.cache/huggingface" \
   "${ENV_ARGS[@]}" \
