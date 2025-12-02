@@ -351,7 +351,7 @@ echo ""
 
 # Diagnostic tip
 echo -e "  ${BOLD}Diagnostic:${NC}"
-echo -e "    To verify NCCL is using InfiniBand/RoCE: ./checkout_setup.sh --diagnose"
+echo -e "    To verify NCCL is using InfiniBand/RoCE: ./checkout_setup.sh --nccl"
 
 echo ""
 
@@ -372,7 +372,7 @@ echo "  # Run full benchmark with JSON output"
 echo "  ./benchmark_current.sh -n 100 -o results.json"
 echo ""
 echo "  # Check NCCL/InfiniBand configuration"
-echo "  ./checkout_setup.sh --diagnose"
+echo "  ./checkout_setup.sh --nccl"
 echo ""
 
 exit $BENCH_EXIT_CODE
