@@ -100,6 +100,9 @@ If this fails, install/configure the NVIDIA Container Toolkit.
 **CRITICAL:** InfiniBand (QSFP) interfaces must be configured and operational for multi-node performance.
 
 ```bash
+# Install InfiniBand Tools
+sudo apt install infiniband-diags
+
 # Check InfiniBand status
 ibstatus
 
@@ -132,7 +135,7 @@ Some models (Llama, Gemma, etc.) require Hugging Face authorization:
 pip install huggingface_hub
 
 # Login to Hugging Face (run on both nodes)
-huggingface-cli login
+hf auth login
 # Enter your token when prompted
 
 # Accept model licenses
