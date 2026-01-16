@@ -91,7 +91,7 @@ You should see your GPU listed with driver version.
 Docker must be installed with NVIDIA Container Runtime configured:
 ```bash
 # Verify Docker works with GPU access
-docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu20.04 nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
 ```
 If this fails, install/configure the NVIDIA Container Toolkit.
 
