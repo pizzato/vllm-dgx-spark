@@ -333,7 +333,7 @@ if [ "${VLLM_NEEDS_UPGRADE}" = "true" ]; then
     if ! command -v uv >/dev/null 2>&1; then
       python3 -m pip install -U uv
     fi
-    uv pip install -U vllm --pre --torch-backend=auto \
+    uv pip install --system -U vllm --pre --torch-backend=auto \
       --extra-index-url ${VLLM_NIGHTLY_INDEX_URL} \
       --extra-index-url ${VLLM_TORCH_INDEX_URL} \
       --index-strategy ${VLLM_INDEX_STRATEGY}
