@@ -39,6 +39,7 @@ MODELS=(
   "microsoft/phi-4"
   "google/gemma-2-27b-it"
   "moonshotai/Kimi-K2.5"
+  "unsloth/Kimi-K2.5-GGUF"
 )
 
 # Human-readable model descriptions
@@ -57,6 +58,7 @@ MODEL_NAMES=(
   "Phi-4 (15B params, ~14-16GB, small but smart)"
   "Gemma2-27B (27B params, ~24-28GB, strong mid-size)"
   "Kimi-K2.5 (multimodal, requires kimi_k2 parsers + trust_remote_code)"
+  "Kimi-K2.5 GGUF (4-bit quantized, smaller footprint, gguf load format)"
 )
 
 # Tensor Parallelism (number of GPUs needed)
@@ -76,6 +78,7 @@ MODEL_TP=(
   2    # Phi-4
   2    # Gemma2-27B
   2    # Kimi-K2.5
+  1    # Kimi-K2.5 GGUF
 )
 
 # Number of nodes required (all models use 2 nodes)
@@ -94,6 +97,7 @@ MODEL_NODES=(
   2    # Phi-4
   2    # Gemma2-27B
   2    # Kimi-K2.5
+  1    # Kimi-K2.5 GGUF
 )
 
 # GPU Memory Utilization (0.90 default)
@@ -112,6 +116,7 @@ MODEL_GPU_MEM=(
   0.90  # Phi-4
   0.90  # Gemma2-27B
   0.90  # Kimi-K2.5
+  0.90  # Kimi-K2.5 GGUF
 )
 
 # Max model length (context window)
@@ -130,6 +135,7 @@ MODEL_MAX_LEN=(
   16384  # Phi-4
   8192   # Gemma2-27B
   131072 # Kimi-K2.5
+  32768  # Kimi-K2.5 GGUF
 )
 
 # Trust remote code flag
@@ -148,6 +154,7 @@ MODEL_TRUST_REMOTE=(
   true   # Phi-4 - requires trust_remote_code
   false  # Gemma2-27B
   true   # Kimi-K2.5 - requires trust_remote_code
+  true   # Kimi-K2.5 GGUF - requires trust_remote_code
 )
 
 # Requires HF token (gated models)
@@ -166,6 +173,7 @@ MODEL_NEEDS_TOKEN=(
   false  # Phi-4
   true   # Gemma2-27B - gated
   false  # Kimi-K2.5
+  false  # Kimi-K2.5 GGUF
 )
 
 # Enable expert parallel for MoE models
@@ -184,6 +192,26 @@ MODEL_EXPERT_PARALLEL=(
   false  # Phi-4
   false  # Gemma2-27B
   false  # Kimi-K2.5
+  false  # Kimi-K2.5 GGUF
+)
+
+# Model load format (safetensors default)
+MODEL_LOAD_FORMAT=(
+  "safetensors" # gpt-oss-120b
+  "safetensors" # gpt-oss-20b
+  "safetensors" # Qwen2.5-7B
+  "safetensors" # Qwen2.5-14B
+  "safetensors" # Qwen2.5-32B
+  "safetensors" # Qwen2.5-72B
+  "safetensors" # Mistral-7B
+  "safetensors" # Mistral-Nemo-12B
+  "safetensors" # Mixtral-8x7B
+  "safetensors" # Llama-3.1-8B
+  "safetensors" # Llama-3.1-70B
+  "safetensors" # Phi-4
+  "safetensors" # Gemma2-27B
+  "safetensors" # Kimi-K2.5
+  "gguf"        # Kimi-K2.5 GGUF
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -464,6 +492,7 @@ NEW_MAX_LEN="${MODEL_MAX_LEN[$IDX]}"
 NEW_TRUST="${MODEL_TRUST_REMOTE[$IDX]}"
 NEEDS_TOKEN="${MODEL_NEEDS_TOKEN[$IDX]}"
 NEW_EXPERT_PARALLEL="${MODEL_EXPERT_PARALLEL[$IDX]}"
+NEW_LOAD_FORMAT="${MODEL_LOAD_FORMAT[$IDX]}"
 
 # Check if model needs HF token
 if [ "${NEEDS_TOKEN}" = "true" ]; then
@@ -567,6 +596,9 @@ if [ -f "${START_SCRIPT}" ]; then
   # Update ENABLE_EXPERT_PARALLEL (for MoE models)
   sed -i "s|^ENABLE_EXPERT_PARALLEL=.*|ENABLE_EXPERT_PARALLEL=\"\${ENABLE_EXPERT_PARALLEL:-${NEW_EXPERT_PARALLEL}}\"|" "${START_SCRIPT}"
 
+  # Update LOAD_FORMAT (e.g., gguf for quantized models)
+  sed -i "s|^LOAD_FORMAT=.*|LOAD_FORMAT=\"\${LOAD_FORMAT:-${NEW_LOAD_FORMAT}}\"|" "${START_SCRIPT}"
+
   log "  Configuration updated in ${START_SCRIPT}"
 else
   log "  WARNING: ${START_SCRIPT} not found"
@@ -618,6 +650,7 @@ export TENSOR_PARALLEL="${NEW_TP}"
 export MAX_MODEL_LEN="${NEW_MAX_LEN}"
 export GPU_MEMORY_UTIL="${NEW_GPU_MEM}"
 export ENABLE_EXPERT_PARALLEL="${NEW_EXPERT_PARALLEL}"
+export LOAD_FORMAT="${NEW_LOAD_FORMAT}"
 export SKIP_MODEL_DOWNLOAD=1  # We already downloaded
 
 if [ "${NEW_NODES}" -gt 1 ]; then

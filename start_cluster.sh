@@ -62,7 +62,7 @@ LOAD_FORMAT="${LOAD_FORMAT:-safetensors}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 # Kimi-K2.5 requires tool/reasoning parsers and trust_remote_code
-if echo "${MODEL}" | grep -qi "Kimi-K2.5"; then
+if echo "${MODEL}" | grep -qi "Kimi-K2.5" && ! echo "${MODEL}" | grep -qi "GGUF"; then
   TRUST_REMOTE_CODE="true"
   EXTRA_ARGS="${EXTRA_ARGS} --tool-call-parser kimi_k2 --reasoning-parser kimi_k2 --mm-encoder-tp-mode data"
 fi

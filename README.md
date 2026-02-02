@@ -11,7 +11,7 @@ Deploy [vLLM](https://github.com/vllm-project/vllm) on NVIDIA DGX Spark systems 
 - **Single-command deployment** - Start entire cluster from head node via SSH
 - **Auto-detection** of InfiniBand IPs, network interfaces, and HCA devices (multi-node)
 - **Generic scripts** that work on any DGX Spark configuration
-- **14 model presets** including Llama, Qwen, Mixtral, Gemma, Kimi
+- **15 model presets** including Llama, Qwen, Mixtral, Gemma, Kimi
 - **InfiniBand RDMA** for high-speed inter-node communication (200Gb/s)
 - **Comprehensive benchmarking** with multiple test profiles
 
@@ -394,11 +394,12 @@ Models can run on single-node (TP=1) or dual-node (TP=2) depending on size.
 | 12 | `microsoft/phi-4` | ~14-16GB | Yes | Small but smart |
 | 13 | `google/gemma-2-27b-it` | ~24-28GB | Yes | Strong mid-size (needs HF token) |
 | 14 | `moonshotai/Kimi-K2.5` | Large | No | Requires vLLM kimi_k2 parsers + trust_remote_code |
+| 15 | `unsloth/Kimi-K2.5-GGUF` | 4-bit | Yes | Quantized GGUF; uses `LOAD_FORMAT=gguf` |
 
 **Single-Node:** Models up to ~80GB fit on one DGX Spark (~120GB VRAM)
 **Dual-Node:** Required for GPT-OSS 120B and other very large models
 
-> **Kimi K2.5 note:** The scripts will upgrade the container to vLLM >= 0.15.0 (nightly wheel via the cu129 index) and transformers >= 4.57.1, and automatically add `--tool-call-parser kimi_k2 --reasoning-parser kimi_k2 --mm-encoder-tp-mode data` when `MODEL=moonshotai/Kimi-K2.5`.
+> **Kimi K2.5 note:** The scripts will upgrade the container to vLLM >= 0.15.0 (nightly wheel via the cu129 index) and transformers >= 4.57.1, and automatically add `--tool-call-parser kimi_k2 --reasoning-parser kimi_k2 --mm-encoder-tp-mode data` when `MODEL=moonshotai/Kimi-K2.5`. The GGUF preset uses `LOAD_FORMAT=gguf` and skips those multimodal parser flags.
 
 ## Benchmark Profiles
 
