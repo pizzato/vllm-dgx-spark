@@ -19,6 +19,8 @@ TRANSFORMERS_MIN_VERSION="${TRANSFORMERS_MIN_VERSION:-4.57.1}"
 VLLM_NIGHTLY_INDEX_URL="${VLLM_NIGHTLY_INDEX_URL:-https://wheels.vllm.ai/nightly/cu129}"
 VLLM_TORCH_INDEX_URL="${VLLM_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu129}"
 VLLM_INDEX_STRATEGY="${VLLM_INDEX_STRATEGY:-unsafe-best-match}"
+LOAD_FORMAT="${LOAD_FORMAT:-safetensors}"
+GGUF_FILE="${GGUF_FILE:-IQ1_S}"
 
 # Model configuration - MUST match the head node's MODEL setting
 MODEL="${MODEL:-openai/gpt-oss-120b}"
@@ -370,12 +372,33 @@ log "  ✅ Ray ${INSTALLED_RAY_VERSION} available"
 if [ -n "${SKIP_MODEL_DOWNLOAD}" ]; then
   log "Step 7/8: Verifying model weights (synced from head)"
   log "  Model: ${MODEL}"
+  if [ "${LOAD_FORMAT}" = "gguf" ]; then
+    log "  GGUF filter: ${GGUF_FILE}"
+  fi
   log "  Skipping download - model was synced from head node via rsync"
 
-  # Verify model was synced by checking for config.json
-  if ! docker exec "${WORKER_NAME}" bash -lc "
-    export HF_HOME=/root/.cache/huggingface
-    python3 -c \"
+  # Verify model was synced
+  if [ "${LOAD_FORMAT}" = "gguf" ]; then
+    if ! docker exec "${WORKER_NAME}" bash -lc "
+      export HF_HOME=/root/.cache/huggingface
+      python3 -c \"
+from huggingface_hub import snapshot_download
+import glob
+import os
+path = snapshot_download('${MODEL}', local_files_only=True)
+pattern = os.path.join(path, f'*${GGUF_FILE}*.gguf')
+matches = glob.glob(pattern)
+if not matches:
+    raise FileNotFoundError(f'No GGUF files matched {pattern}')
+print(f'  ✅ GGUF verified at: {matches[0]}')
+\"
+    "; then
+      error "Model verification failed - GGUF file missing on worker"
+    fi
+  else
+    if ! docker exec "${WORKER_NAME}" bash -lc "
+      export HF_HOME=/root/.cache/huggingface
+      python3 -c \"
 from huggingface_hub import snapshot_download
 import os
 path = snapshot_download('${MODEL}', local_files_only=True)
@@ -384,8 +407,9 @@ if not os.path.exists(config_path):
     raise FileNotFoundError(f'Model config not found at {config_path}')
 print(f'  ✅ Model verified at: {path}')
 \"
-  "; then
-    error "Model verification failed - model may not have been synced correctly from head"
+    "; then
+      error "Model verification failed - model may not have been synced correctly from head"
+    fi
   fi
 
   log "  Model verification complete"
@@ -404,18 +428,46 @@ else
   fi
 
   # Download model with verification (using 'hf download' instead of deprecated 'huggingface-cli download')
-  if ! docker exec "${WORKER_NAME}" bash -lc "
-    export HF_HOME=/root/.cache/huggingface
-    echo '  Downloading model files (excluding original/* and metal/* to save space)...'
-    hf download ${MODEL} ${HF_TOKEN_ARG} --exclude 'original/*' --exclude 'metal/*' 2>&1 | tail -5
-  "; then
-    error "Failed to download model ${MODEL}"
+  if [ "${LOAD_FORMAT}" = "gguf" ]; then
+    if ! docker exec "${WORKER_NAME}" bash -lc "
+      export HF_HOME=/root/.cache/huggingface
+      echo '  Downloading GGUF files matching: *${GGUF_FILE}*.gguf'
+      hf download ${MODEL} ${HF_TOKEN_ARG} --include '*${GGUF_FILE}*.gguf' 2>&1 | tail -5
+    "; then
+      error "Failed to download GGUF files for ${MODEL}"
+    fi
+  else
+    if ! docker exec "${WORKER_NAME}" bash -lc "
+      export HF_HOME=/root/.cache/huggingface
+      echo '  Downloading model files (excluding original/* and metal/* to save space)...'
+      hf download ${MODEL} ${HF_TOKEN_ARG} --exclude 'original/*' --exclude 'metal/*' 2>&1 | tail -5
+    "; then
+      error "Failed to download model ${MODEL}"
+    fi
   fi
 
   # Verify model was downloaded by checking for config.json
-  if ! docker exec "${WORKER_NAME}" bash -lc "
-    export HF_HOME=/root/.cache/huggingface
-    python3 -c \"
+  if [ "${LOAD_FORMAT}" = "gguf" ]; then
+    if ! docker exec "${WORKER_NAME}" bash -lc "
+      export HF_HOME=/root/.cache/huggingface
+      python3 -c \"
+from huggingface_hub import snapshot_download
+import glob
+import os
+path = snapshot_download('${MODEL}', local_files_only=True)
+pattern = os.path.join(path, f'*${GGUF_FILE}*.gguf')
+matches = glob.glob(pattern)
+if not matches:
+    raise FileNotFoundError(f'No GGUF files matched {pattern}')
+print(f'  ✅ GGUF verified at: {matches[0]}')
+\"
+    "; then
+      error "GGUF verification failed - matching file not found"
+    fi
+  else
+    if ! docker exec "${WORKER_NAME}" bash -lc "
+      export HF_HOME=/root/.cache/huggingface
+      python3 -c \"
 from huggingface_hub import snapshot_download
 import os
 path = snapshot_download('${MODEL}', local_files_only=True)
@@ -424,8 +476,9 @@ if not os.path.exists(config_path):
     raise FileNotFoundError(f'Model config not found at {config_path}')
 print(f'  ✅ Model verified at: {path}')
 \"
-  "; then
-    error "Model verification failed - config.json not found"
+    "; then
+      error "Model verification failed - config.json not found"
+    fi
   fi
 
   log "  Model download complete and verified"

@@ -214,6 +214,25 @@ MODEL_LOAD_FORMAT=(
   "gguf"        # Kimi-K2.5 GGUF
 )
 
+# Optional GGUF file selector (used when LOAD_FORMAT=gguf)
+MODEL_GGUF_FILE=(
+  ""      # gpt-oss-120b
+  ""      # gpt-oss-20b
+  ""      # Qwen2.5-7B
+  ""      # Qwen2.5-14B
+  ""      # Qwen2.5-32B
+  ""      # Qwen2.5-72B
+  ""      # Mistral-7B
+  ""      # Mistral-Nemo-12B
+  ""      # Mixtral-8x7B
+  ""      # Llama-3.1-8B
+  ""      # Llama-3.1-70B
+  ""      # Phi-4
+  ""      # Gemma2-27B
+  ""      # Kimi-K2.5
+  "IQ1_S" # Kimi-K2.5 GGUF (smallest 1-bit)
+)
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Helper Functions
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -493,6 +512,7 @@ NEW_TRUST="${MODEL_TRUST_REMOTE[$IDX]}"
 NEEDS_TOKEN="${MODEL_NEEDS_TOKEN[$IDX]}"
 NEW_EXPERT_PARALLEL="${MODEL_EXPERT_PARALLEL[$IDX]}"
 NEW_LOAD_FORMAT="${MODEL_LOAD_FORMAT[$IDX]}"
+NEW_GGUF_FILE="${MODEL_GGUF_FILE[$IDX]}"
 
 # Check if model needs HF token
 if [ "${NEEDS_TOKEN}" = "true" ]; then
@@ -598,6 +618,8 @@ if [ -f "${START_SCRIPT}" ]; then
 
   # Update LOAD_FORMAT (e.g., gguf for quantized models)
   sed -i "s|^LOAD_FORMAT=.*|LOAD_FORMAT=\"\${LOAD_FORMAT:-${NEW_LOAD_FORMAT}}\"|" "${START_SCRIPT}"
+  # Update GGUF_FILE selector (used for GGUF models)
+  sed -i "s|^GGUF_FILE=.*|GGUF_FILE=\"\${GGUF_FILE:-${NEW_GGUF_FILE}}\"|" "${START_SCRIPT}"
 
   log "  Configuration updated in ${START_SCRIPT}"
 else
@@ -651,6 +673,7 @@ export MAX_MODEL_LEN="${NEW_MAX_LEN}"
 export GPU_MEMORY_UTIL="${NEW_GPU_MEM}"
 export ENABLE_EXPERT_PARALLEL="${NEW_EXPERT_PARALLEL}"
 export LOAD_FORMAT="${NEW_LOAD_FORMAT}"
+export GGUF_FILE="${NEW_GGUF_FILE}"
 export SKIP_MODEL_DOWNLOAD=1  # We already downloaded
 
 if [ "${NEW_NODES}" -gt 1 ]; then

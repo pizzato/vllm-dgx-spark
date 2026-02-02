@@ -302,6 +302,8 @@ MAX_MODEL_LEN="8192"               # Max context length
 SWAP_SPACE="16"                    # Swap space in GB
 ENABLE_EXPERT_PARALLEL="true"      # For MoE models
 TRUST_REMOTE_CODE="false"          # For custom model code
+LOAD_FORMAT="safetensors"          # Model load format
+GGUF_FILE="IQ1_S"                  # GGUF selector (e.g., IQ1_S for 1-bit)
 VLLM_MIN_VERSION="0.15.0"          # Minimum vLLM version (Kimi K2.5 needs >=0.15.0)
 TRANSFORMERS_MIN_VERSION="4.57.1"  # Minimum transformers version (Kimi K2.5 needs >=4.57.1)
 VLLM_NIGHTLY_INDEX_URL="https://wheels.vllm.ai/nightly/cu129" # vLLM nightly wheel index
@@ -394,12 +396,12 @@ Models can run on single-node (TP=1) or dual-node (TP=2) depending on size.
 | 12 | `microsoft/phi-4` | ~14-16GB | Yes | Small but smart |
 | 13 | `google/gemma-2-27b-it` | ~24-28GB | Yes | Strong mid-size (needs HF token) |
 | 14 | `moonshotai/Kimi-K2.5` | Large | No | Requires vLLM kimi_k2 parsers + trust_remote_code |
-| 15 | `unsloth/Kimi-K2.5-GGUF` | 4-bit | Yes | Quantized GGUF; uses `LOAD_FORMAT=gguf` |
+| 15 | `unsloth/Kimi-K2.5-GGUF` | 1-bit | Yes | Quantized GGUF; uses `LOAD_FORMAT=gguf` + `GGUF_FILE=IQ1_S` |
 
 **Single-Node:** Models up to ~80GB fit on one DGX Spark (~120GB VRAM)
 **Dual-Node:** Required for GPT-OSS 120B and other very large models
 
-> **Kimi K2.5 note:** The scripts will upgrade the container to vLLM >= 0.15.0 (nightly wheel via the cu129 index) and transformers >= 4.57.1, and automatically add `--tool-call-parser kimi_k2 --reasoning-parser kimi_k2 --mm-encoder-tp-mode data` when `MODEL=moonshotai/Kimi-K2.5`. The GGUF preset uses `LOAD_FORMAT=gguf` and skips those multimodal parser flags.
+> **Kimi K2.5 note:** The scripts will upgrade the container to vLLM >= 0.15.0 (nightly wheel via the cu129 index) and transformers >= 4.57.1, and automatically add `--tool-call-parser kimi_k2 --reasoning-parser kimi_k2 --mm-encoder-tp-mode data` when `MODEL=moonshotai/Kimi-K2.5`. The GGUF preset uses `LOAD_FORMAT=gguf`, sets `GGUF_FILE=IQ1_S` to limit downloads to the smallest 1-bit file, and skips those multimodal parser flags.
 
 ## Benchmark Profiles
 

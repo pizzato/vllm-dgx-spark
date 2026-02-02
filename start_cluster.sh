@@ -60,6 +60,7 @@ TRUST_REMOTE_CODE="${TRUST_REMOTE_CODE:-false}"
 # Model loading format (safetensors is recommended)
 LOAD_FORMAT="${LOAD_FORMAT:-safetensors}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
+GGUF_FILE="${GGUF_FILE:-IQ1_S}"
 
 # Kimi-K2.5 requires tool/reasoning parsers and trust_remote_code
 if echo "${MODEL}" | grep -qi "Kimi-K2.5" && ! echo "${MODEL}" | grep -qi "GGUF"; then
@@ -706,6 +707,9 @@ log "  ✅ Ray ${INSTALLED_RAY_VERSION} available"
 
 log "Step 6/${TOTAL_STEPS}: Pre-downloading model weights"
 log "  Model: ${MODEL}"
+if [ "${LOAD_FORMAT}" = "gguf" ]; then
+  log "  GGUF filter: ${GGUF_FILE}"
+fi
 log "  This may take a while for large models on first download..."
 
 # Build HF token arg if provided
@@ -715,18 +719,46 @@ if [ -n "${HF_TOKEN}" ]; then
 fi
 
 # Download model with verification
-if ! docker exec "${NAME}" bash -lc "
-  export HF_HOME=/root/.cache/huggingface
-  echo '  Downloading model files (excluding original/* and metal/* to save space)...'
-  hf download ${MODEL} ${HF_TOKEN_ARG} --exclude 'original/*' --exclude 'metal/*' 2>&1 | tail -5
-"; then
-  error "Failed to download model ${MODEL}"
+if [ "${LOAD_FORMAT}" = "gguf" ]; then
+  if ! docker exec "${NAME}" bash -lc "
+    export HF_HOME=/root/.cache/huggingface
+    echo '  Downloading GGUF files matching: *${GGUF_FILE}*.gguf'
+    hf download ${MODEL} ${HF_TOKEN_ARG} --include '*${GGUF_FILE}*.gguf' 2>&1 | tail -5
+  "; then
+    error "Failed to download GGUF files for ${MODEL}"
+  fi
+else
+  if ! docker exec "${NAME}" bash -lc "
+    export HF_HOME=/root/.cache/huggingface
+    echo '  Downloading model files (excluding original/* and metal/* to save space)...'
+    hf download ${MODEL} ${HF_TOKEN_ARG} --exclude 'original/*' --exclude 'metal/*' 2>&1 | tail -5
+  "; then
+    error "Failed to download model ${MODEL}"
+  fi
 fi
 
 # Verify model was downloaded by checking for config.json
-if ! docker exec "${NAME}" bash -lc "
-  export HF_HOME=/root/.cache/huggingface
-  python3 -c \"
+if [ "${LOAD_FORMAT}" = "gguf" ]; then
+  if ! docker exec "${NAME}" bash -lc "
+    export HF_HOME=/root/.cache/huggingface
+    python3 -c \"
+from huggingface_hub import snapshot_download
+import glob
+import os
+path = snapshot_download('${MODEL}', local_files_only=True)
+pattern = os.path.join(path, f'*${GGUF_FILE}*.gguf')
+matches = glob.glob(pattern)
+if not matches:
+    raise FileNotFoundError(f'No GGUF files matched {pattern}')
+print(f'  ✅ GGUF verified at: {matches[0]}')
+\"
+  "; then
+    error "GGUF verification failed - matching file not found"
+  fi
+else
+  if ! docker exec "${NAME}" bash -lc "
+    export HF_HOME=/root/.cache/huggingface
+    python3 -c \"
 from huggingface_hub import snapshot_download
 import os
 path = snapshot_download('${MODEL}', local_files_only=True)
@@ -735,8 +767,9 @@ if not os.path.exists(config_path):
     raise FileNotFoundError(f'Model config not found at {config_path}')
 print(f'  ✅ Model verified at: {path}')
 \"
-"; then
-  error "Model verification failed - config.json not found"
+  "; then
+    error "Model verification failed - config.json not found"
+  fi
 fi
 
 log "  Model download complete and verified"
@@ -985,7 +1018,25 @@ docker exec "${NAME}" bash -lc "
   export VLLM_LOGGING_LEVEL=INFO
   export VLLM_MXFP4_USE_MARLIN=1
 
-  nohup vllm serve ${MODEL} ${VLLM_ARGS} > /var/log/vllm.log 2>&1 &
+  SERVE_MODEL='${MODEL}'
+  if [ '${LOAD_FORMAT}' = 'gguf' ]; then
+    SERVE_MODEL=\$(python3 - <<'PY'
+from huggingface_hub import snapshot_download
+import glob
+import os
+model = '${MODEL}'
+gguf_token = '${GGUF_FILE}'
+path = snapshot_download(model, local_files_only=True)
+pattern = os.path.join(path, f'*{gguf_token}*.gguf')
+matches = sorted(glob.glob(pattern))
+if not matches:
+    raise SystemExit(f'No GGUF files matched {pattern}')
+print(matches[0])
+PY
+    )
+  fi
+
+  nohup vllm serve \${SERVE_MODEL} ${VLLM_ARGS} > /var/log/vllm.log 2>&1 &
 
   sleep 1
 " || true
