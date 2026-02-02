@@ -38,6 +38,7 @@ MODELS=(
   "meta-llama/Llama-3.1-70B-Instruct"
   "microsoft/phi-4"
   "google/gemma-2-27b-it"
+  "moonshotai/Kimi-K2.5"
 )
 
 # Human-readable model descriptions
@@ -55,6 +56,7 @@ MODEL_NAMES=(
   "Llama-3.1-70B (70B params, ~65GB, high quality)"
   "Phi-4 (15B params, ~14-16GB, small but smart)"
   "Gemma2-27B (27B params, ~24-28GB, strong mid-size)"
+  "Kimi-K2.5 (multimodal, requires kimi_k2 parsers + trust_remote_code)"
 )
 
 # Tensor Parallelism (number of GPUs needed)
@@ -73,6 +75,7 @@ MODEL_TP=(
   2    # Llama-3.1-70B
   2    # Phi-4
   2    # Gemma2-27B
+  2    # Kimi-K2.5
 )
 
 # Number of nodes required (all models use 2 nodes)
@@ -90,6 +93,7 @@ MODEL_NODES=(
   2    # Llama-3.1-70B
   2    # Phi-4
   2    # Gemma2-27B
+  2    # Kimi-K2.5
 )
 
 # GPU Memory Utilization (0.90 default)
@@ -107,6 +111,7 @@ MODEL_GPU_MEM=(
   0.90  # Llama-3.1-70B
   0.90  # Phi-4
   0.90  # Gemma2-27B
+  0.90  # Kimi-K2.5
 )
 
 # Max model length (context window)
@@ -124,6 +129,7 @@ MODEL_MAX_LEN=(
   131072 # Llama-3.1-70B - 128k context
   16384  # Phi-4
   8192   # Gemma2-27B
+  131072 # Kimi-K2.5
 )
 
 # Trust remote code flag
@@ -141,6 +147,7 @@ MODEL_TRUST_REMOTE=(
   false  # Llama-3.1-70B
   true   # Phi-4 - requires trust_remote_code
   false  # Gemma2-27B
+  true   # Kimi-K2.5 - requires trust_remote_code
 )
 
 # Requires HF token (gated models)
@@ -158,6 +165,7 @@ MODEL_NEEDS_TOKEN=(
   true   # Llama-3.1-70B - gated
   false  # Phi-4
   true   # Gemma2-27B - gated
+  false  # Kimi-K2.5
 )
 
 # Enable expert parallel for MoE models
@@ -175,6 +183,7 @@ MODEL_EXPERT_PARALLEL=(
   false  # Llama-3.1-70B
   false  # Phi-4
   false  # Gemma2-27B
+  false  # Kimi-K2.5
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

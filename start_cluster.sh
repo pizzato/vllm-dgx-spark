@@ -18,11 +18,14 @@ elif [ -f "${SCRIPT_DIR}/config.env" ]; then
 fi
 
 # Configuration (can be overridden by config.env or environment)
-IMAGE="${VLLM_IMAGE:-${IMAGE:-nvcr.io/nvidia/vllm:25.11-py3}}"
+IMAGE="${VLLM_IMAGE:-${IMAGE:-nvcr.io/nvidia/vllm:26.01-py3}}"
 NAME="${HEAD_CONTAINER_NAME:-${NAME:-ray-head}}"
 HF_CACHE="${HF_CACHE:-/raid/hf-cache}"
 HF_TOKEN="${HF_TOKEN:-}"
 RAY_VERSION="${RAY_VERSION:-2.52.1}"
+VLLM_MIN_VERSION="${VLLM_MIN_VERSION:-0.15.0}"
+TRANSFORMERS_MIN_VERSION="${TRANSFORMERS_MIN_VERSION:-4.57.1}"
+VLLM_NIGHTLY_INDEX_URL="${VLLM_NIGHTLY_INDEX_URL:-https://wheels.vllm.ai/nightly}"
 
 # Worker node configuration (for orchestrated setup)
 # WORKER_HOST: Ethernet IP for SSH access (e.g., 192.168.7.111)
@@ -55,6 +58,12 @@ TRUST_REMOTE_CODE="${TRUST_REMOTE_CODE:-false}"
 # Model loading format (safetensors is recommended)
 LOAD_FORMAT="${LOAD_FORMAT:-safetensors}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
+
+# Kimi-K2.5 requires tool/reasoning parsers and trust_remote_code
+if echo "${MODEL}" | grep -qi "Kimi-K2.5"; then
+  TRUST_REMOTE_CODE="true"
+  EXTRA_ARGS="${EXTRA_ARGS} --tool-call-parser kimi_k2 --reasoning-parser kimi_k2 --mm-encoder-tp-mode data"
+fi
 
 # Ports
 VLLM_PORT="${VLLM_PORT:-8000}"
@@ -600,21 +609,86 @@ fi
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 log "Step 5/${TOTAL_STEPS}: Verifying container dependencies"
-# The nvidia vLLM container already has vLLM and Ray properly built
-# Do NOT pip install vllm as it would overwrite the CUDA-enabled version with CPU-only PyPI version
+# The NVIDIA vLLM container ships with a CUDA-enabled build, but Kimi-K2.5
+# requires vLLM >= ${VLLM_MIN_VERSION} with kimi_k2 parsers (nightly wheel).
 
 # Verify vLLM is available with CUDA
 CUDA_AVAILABLE=$(docker exec "${NAME}" python3 -c "import torch; print(torch.cuda.is_available())" 2>/dev/null || echo "False")
 if [ "${CUDA_AVAILABLE}" != "True" ]; then
-  error "PyTorch CUDA not available - container may be corrupted. Try: docker pull nvcr.io/nvidia/vllm:25.11-py3"
+  error "PyTorch CUDA not available - container may be corrupted. Try: docker pull nvcr.io/nvidia/vllm:26.01-py3"
 fi
 log "  ✅ PyTorch CUDA available"
+
+VLLM_NEEDS_UPGRADE=$(docker exec "${NAME}" bash -lc "
+  MIN_VERSION='${VLLM_MIN_VERSION}' PKG='vllm' python3 - <<'PY'
+import os
+from importlib import metadata
+try:
+    from packaging.version import Version
+except Exception:
+    from distutils.version import LooseVersion as Version
+
+pkg = os.environ['PKG']
+min_version = os.environ['MIN_VERSION']
+try:
+    version = metadata.version(pkg)
+except metadata.PackageNotFoundError:
+    print('true')
+    raise SystemExit(0)
+
+print('true' if Version(version) < Version(min_version) else 'false')
+PY
+")
+
+TRANSFORMERS_NEEDS_UPGRADE=$(docker exec "${NAME}" bash -lc "
+  MIN_VERSION='${TRANSFORMERS_MIN_VERSION}' PKG='transformers' python3 - <<'PY'
+import os
+from importlib import metadata
+try:
+    from packaging.version import Version
+except Exception:
+    from distutils.version import LooseVersion as Version
+
+pkg = os.environ['PKG']
+min_version = os.environ['MIN_VERSION']
+try:
+    version = metadata.version(pkg)
+except metadata.PackageNotFoundError:
+    print('true')
+    raise SystemExit(0)
+
+print('true' if Version(version) < Version(min_version) else 'false')
+PY
+")
+
+if [ "${VLLM_NEEDS_UPGRADE}" = "true" ]; then
+  log "  ⬆️  Upgrading vLLM to >= ${VLLM_MIN_VERSION} (nightly wheel)"
+  docker exec "${NAME}" bash -lc "
+    set -e
+    if ! command -v uv >/dev/null 2>&1; then
+      python3 -m pip install -U uv
+    fi
+    uv pip install -U vllm --torch-backend=auto --extra-index-url ${VLLM_NIGHTLY_INDEX_URL}
+  "
+fi
+
+if [ "${TRANSFORMERS_NEEDS_UPGRADE}" = "true" ]; then
+  log "  ⬆️  Upgrading transformers to >= ${TRANSFORMERS_MIN_VERSION}"
+  docker exec "${NAME}" bash -lc "python3 -m pip install -U \"transformers>=${TRANSFORMERS_MIN_VERSION}\""
+fi
 
 INSTALLED_VLLM_VERSION=$(docker exec "${NAME}" python3 -c "import vllm; print(vllm.__version__)" 2>/dev/null || echo "unknown")
 if [ "${INSTALLED_VLLM_VERSION}" == "unknown" ]; then
   error "vLLM not found in container"
 fi
 log "  ✅ vLLM ${INSTALLED_VLLM_VERSION} available"
+
+# Verify transformers version
+INSTALLED_TRANSFORMERS_VERSION=$(docker exec "${NAME}" python3 -c "import transformers; print(transformers.__version__)" 2>/dev/null || echo "unknown")
+if [ "${INSTALLED_TRANSFORMERS_VERSION}" == "unknown" ]; then
+  error "transformers not found in container"
+fi
+log "  ✅ transformers ${INSTALLED_TRANSFORMERS_VERSION} available"
 
 # Verify Ray version
 INSTALLED_RAY_VERSION=$(docker exec "${NAME}" python3 -c "import ray; print(ray.__version__)" 2>/dev/null || echo "unknown")

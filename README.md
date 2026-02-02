@@ -11,7 +11,7 @@ Deploy [vLLM](https://github.com/vllm-project/vllm) on NVIDIA DGX Spark systems 
 - **Single-command deployment** - Start entire cluster from head node via SSH
 - **Auto-detection** of InfiniBand IPs, network interfaces, and HCA devices (multi-node)
 - **Generic scripts** that work on any DGX Spark configuration
-- **13 model presets** including Llama, Qwen, Mixtral, Gemma
+- **14 model presets** including Llama, Qwen, Mixtral, Gemma, Kimi
 - **InfiniBand RDMA** for high-speed inter-node communication (200Gb/s)
 - **Comprehensive benchmarking** with multiple test profiles
 
@@ -302,12 +302,15 @@ MAX_MODEL_LEN="8192"               # Max context length
 SWAP_SPACE="16"                    # Swap space in GB
 ENABLE_EXPERT_PARALLEL="true"      # For MoE models
 TRUST_REMOTE_CODE="false"          # For custom model code
+VLLM_MIN_VERSION="0.15.0"          # Minimum vLLM version (Kimi K2.5 needs >=0.15.0)
+TRANSFORMERS_MIN_VERSION="4.57.1"  # Minimum transformers version (Kimi K2.5 needs >=4.57.1)
+VLLM_NIGHTLY_INDEX_URL="https://wheels.vllm.ai/nightly" # vLLM nightly wheel index
 
 # ┌─────────────────────────────────────────────────────────────────┐
 # │ Optional                                                        │
 # └─────────────────────────────────────────────────────────────────┘
 HF_TOKEN="hf_xxx"                  # For gated models (Llama, etc.)
-VLLM_IMAGE="nvcr.io/nvidia/vllm:25.11-py3"  # Docker image
+VLLM_IMAGE="nvcr.io/nvidia/vllm:26.01-py3"  # Docker image
 ```
 
 ### Single-Node vs Multi-Node Mode Detection
@@ -388,9 +391,12 @@ Models can run on single-node (TP=1) or dual-node (TP=2) depending on size.
 | 11 | `meta-llama/Llama-3.1-70B-Instruct` | ~65GB | Yes | High quality (needs HF token) |
 | 12 | `microsoft/phi-4` | ~14-16GB | Yes | Small but smart |
 | 13 | `google/gemma-2-27b-it` | ~24-28GB | Yes | Strong mid-size (needs HF token) |
+| 14 | `moonshotai/Kimi-K2.5` | Large | No | Requires vLLM kimi_k2 parsers + trust_remote_code |
 
 **Single-Node:** Models up to ~80GB fit on one DGX Spark (~120GB VRAM)
 **Dual-Node:** Required for GPT-OSS 120B and other very large models
+
+> **Kimi K2.5 note:** The scripts will upgrade the container to vLLM >= 0.15.0 (nightly wheel) and transformers >= 4.57.1, and automatically add `--tool-call-parser kimi_k2 --reasoning-parser kimi_k2 --mm-encoder-tp-mode data` when `MODEL=moonshotai/Kimi-K2.5`.
 
 ## Benchmark Profiles
 
