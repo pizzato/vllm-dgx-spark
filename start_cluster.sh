@@ -25,7 +25,9 @@ HF_TOKEN="${HF_TOKEN:-}"
 RAY_VERSION="${RAY_VERSION:-2.52.1}"
 VLLM_MIN_VERSION="${VLLM_MIN_VERSION:-0.15.0}"
 TRANSFORMERS_MIN_VERSION="${TRANSFORMERS_MIN_VERSION:-4.57.1}"
-VLLM_NIGHTLY_INDEX_URL="${VLLM_NIGHTLY_INDEX_URL:-https://wheels.vllm.ai/nightly}"
+VLLM_NIGHTLY_INDEX_URL="${VLLM_NIGHTLY_INDEX_URL:-https://wheels.vllm.ai/nightly/cu129}"
+VLLM_TORCH_INDEX_URL="${VLLM_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu129}"
+VLLM_INDEX_STRATEGY="${VLLM_INDEX_STRATEGY:-unsafe-best-match}"
 
 # Worker node configuration (for orchestrated setup)
 # WORKER_HOST: Ethernet IP for SSH access (e.g., 192.168.7.111)
@@ -668,7 +670,10 @@ if [ "${VLLM_NEEDS_UPGRADE}" = "true" ]; then
     if ! command -v uv >/dev/null 2>&1; then
       python3 -m pip install -U uv
     fi
-    uv pip install -U vllm --torch-backend=auto --extra-index-url ${VLLM_NIGHTLY_INDEX_URL}
+    uv pip install -U vllm --pre --torch-backend=auto \
+      --extra-index-url ${VLLM_NIGHTLY_INDEX_URL} \
+      --extra-index-url ${VLLM_TORCH_INDEX_URL} \
+      --index-strategy ${VLLM_INDEX_STRATEGY}
   "
 fi
 

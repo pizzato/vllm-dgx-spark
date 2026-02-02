@@ -304,7 +304,9 @@ ENABLE_EXPERT_PARALLEL="true"      # For MoE models
 TRUST_REMOTE_CODE="false"          # For custom model code
 VLLM_MIN_VERSION="0.15.0"          # Minimum vLLM version (Kimi K2.5 needs >=0.15.0)
 TRANSFORMERS_MIN_VERSION="4.57.1"  # Minimum transformers version (Kimi K2.5 needs >=4.57.1)
-VLLM_NIGHTLY_INDEX_URL="https://wheels.vllm.ai/nightly" # vLLM nightly wheel index
+VLLM_NIGHTLY_INDEX_URL="https://wheels.vllm.ai/nightly/cu129" # vLLM nightly wheel index
+VLLM_TORCH_INDEX_URL="https://download.pytorch.org/whl/cu129" # PyTorch CUDA wheel index
+VLLM_INDEX_STRATEGY="unsafe-best-match" # uv index strategy for nightly wheels
 
 # ┌─────────────────────────────────────────────────────────────────┐
 # │ Optional                                                        │
@@ -396,7 +398,7 @@ Models can run on single-node (TP=1) or dual-node (TP=2) depending on size.
 **Single-Node:** Models up to ~80GB fit on one DGX Spark (~120GB VRAM)
 **Dual-Node:** Required for GPT-OSS 120B and other very large models
 
-> **Kimi K2.5 note:** The scripts will upgrade the container to vLLM >= 0.15.0 (nightly wheel) and transformers >= 4.57.1, and automatically add `--tool-call-parser kimi_k2 --reasoning-parser kimi_k2 --mm-encoder-tp-mode data` when `MODEL=moonshotai/Kimi-K2.5`.
+> **Kimi K2.5 note:** The scripts will upgrade the container to vLLM >= 0.15.0 (nightly wheel via the cu129 index) and transformers >= 4.57.1, and automatically add `--tool-call-parser kimi_k2 --reasoning-parser kimi_k2 --mm-encoder-tp-mode data` when `MODEL=moonshotai/Kimi-K2.5`.
 
 ## Benchmark Profiles
 

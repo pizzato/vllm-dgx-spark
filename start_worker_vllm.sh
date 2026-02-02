@@ -16,7 +16,9 @@ HF_CACHE="${HF_CACHE:-/raid/hf-cache}"
 HF_TOKEN="${HF_TOKEN:-}"  # Set via: export HF_TOKEN=hf_xxx
 VLLM_MIN_VERSION="${VLLM_MIN_VERSION:-0.15.0}"
 TRANSFORMERS_MIN_VERSION="${TRANSFORMERS_MIN_VERSION:-4.57.1}"
-VLLM_NIGHTLY_INDEX_URL="${VLLM_NIGHTLY_INDEX_URL:-https://wheels.vllm.ai/nightly}"
+VLLM_NIGHTLY_INDEX_URL="${VLLM_NIGHTLY_INDEX_URL:-https://wheels.vllm.ai/nightly/cu129}"
+VLLM_TORCH_INDEX_URL="${VLLM_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu129}"
+VLLM_INDEX_STRATEGY="${VLLM_INDEX_STRATEGY:-unsafe-best-match}"
 
 # Model configuration - MUST match the head node's MODEL setting
 MODEL="${MODEL:-openai/gpt-oss-120b}"
@@ -331,7 +333,10 @@ if [ "${VLLM_NEEDS_UPGRADE}" = "true" ]; then
     if ! command -v uv >/dev/null 2>&1; then
       python3 -m pip install -U uv
     fi
-    uv pip install -U vllm --torch-backend=auto --extra-index-url ${VLLM_NIGHTLY_INDEX_URL}
+    uv pip install -U vllm --pre --torch-backend=auto \
+      --extra-index-url ${VLLM_NIGHTLY_INDEX_URL} \
+      --extra-index-url ${VLLM_TORCH_INDEX_URL} \
+      --index-strategy ${VLLM_INDEX_STRATEGY}
   "
 fi
 
