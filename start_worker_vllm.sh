@@ -10,10 +10,17 @@ set -euo pipefail
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 # Configuration
-IMAGE="${IMAGE:-nvcr.io/nvidia/vllm:25.11-py3}"
+IMAGE="${IMAGE:-nvcr.io/nvidia/vllm:26.01-py3}"
 RAY_VERSION="${RAY_VERSION:-2.52.1}"
 HF_CACHE="${HF_CACHE:-/raid/hf-cache}"
 HF_TOKEN="${HF_TOKEN:-}"  # Set via: export HF_TOKEN=hf_xxx
+VLLM_MIN_VERSION="${VLLM_MIN_VERSION:-0.15.0}"
+TRANSFORMERS_MIN_VERSION="${TRANSFORMERS_MIN_VERSION:-4.57.1}"
+VLLM_NIGHTLY_INDEX_URL="${VLLM_NIGHTLY_INDEX_URL:-https://wheels.vllm.ai/nightly/cu129}"
+VLLM_TORCH_INDEX_URL="${VLLM_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu129}"
+VLLM_INDEX_STRATEGY="${VLLM_INDEX_STRATEGY:-unsafe-best-match}"
+LOAD_FORMAT="${LOAD_FORMAT:-safetensors}"
+GGUF_FILE="${GGUF_FILE:-IQ1_S}"
 
 # Model configuration - MUST match the head node's MODEL setting
 MODEL="${MODEL:-openai/gpt-oss-120b}"
@@ -269,21 +276,89 @@ fi
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 log "Step 6/8: Verifying container dependencies"
-# The nvidia vLLM container already has vLLM and Ray properly built
-# Do NOT pip install vllm as it would overwrite the CUDA-enabled version with CPU-only PyPI version
+# The NVIDIA vLLM container ships with a CUDA-enabled build, but Kimi-K2.5
+# requires vLLM >= ${VLLM_MIN_VERSION} with kimi_k2 parsers (nightly wheel).
 
 # Verify vLLM is available with CUDA
 CUDA_AVAILABLE=$(docker exec "${WORKER_NAME}" python3 -c "import torch; print(torch.cuda.is_available())" 2>/dev/null || echo "False")
 if [ "${CUDA_AVAILABLE}" != "True" ]; then
-  error "PyTorch CUDA not available - container may be corrupted. Try: docker pull nvcr.io/nvidia/vllm:25.11-py3"
+  error "PyTorch CUDA not available - container may be corrupted. Try: docker pull nvcr.io/nvidia/vllm:26.01-py3"
 fi
 log "  ✅ PyTorch CUDA available"
+
+VLLM_NEEDS_UPGRADE=$(docker exec "${WORKER_NAME}" bash -lc "
+  MIN_VERSION='${VLLM_MIN_VERSION}' PKG='vllm' python3 - <<'PY'
+import os
+from importlib import metadata
+try:
+    from packaging.version import Version
+except Exception:
+    from distutils.version import LooseVersion as Version
+
+pkg = os.environ['PKG']
+min_version = os.environ['MIN_VERSION']
+try:
+    version = metadata.version(pkg)
+except metadata.PackageNotFoundError:
+    print('true')
+    raise SystemExit(0)
+
+print('true' if Version(version) < Version(min_version) else 'false')
+PY
+")
+
+TRANSFORMERS_NEEDS_UPGRADE=$(docker exec "${WORKER_NAME}" bash -lc "
+  MIN_VERSION='${TRANSFORMERS_MIN_VERSION}' PKG='transformers' python3 - <<'PY'
+import os
+from importlib import metadata
+try:
+    from packaging.version import Version
+except Exception:
+    from distutils.version import LooseVersion as Version
+
+pkg = os.environ['PKG']
+min_version = os.environ['MIN_VERSION']
+try:
+    version = metadata.version(pkg)
+except metadata.PackageNotFoundError:
+    print('true')
+    raise SystemExit(0)
+
+print('true' if Version(version) < Version(min_version) else 'false')
+PY
+")
+
+if [ "${VLLM_NEEDS_UPGRADE}" = "true" ]; then
+  log "  ⬆️  Upgrading vLLM to >= ${VLLM_MIN_VERSION} (nightly wheel)"
+  docker exec "${WORKER_NAME}" bash -lc "
+    set -e
+    if ! command -v uv >/dev/null 2>&1; then
+      python3 -m pip install -U uv
+    fi
+    uv pip install --system --break-system-packages -U vllm --pre --torch-backend=auto \
+      --extra-index-url ${VLLM_NIGHTLY_INDEX_URL} \
+      --extra-index-url ${VLLM_TORCH_INDEX_URL} \
+      --index-strategy ${VLLM_INDEX_STRATEGY}
+  "
+fi
+
+if [ "${TRANSFORMERS_NEEDS_UPGRADE}" = "true" ]; then
+  log "  ⬆️  Upgrading transformers to >= ${TRANSFORMERS_MIN_VERSION}"
+  docker exec "${WORKER_NAME}" bash -lc "python3 -m pip install -U \"transformers>=${TRANSFORMERS_MIN_VERSION}\""
+fi
 
 INSTALLED_VLLM_VERSION=$(docker exec "${WORKER_NAME}" python3 -c "import vllm; print(vllm.__version__)" 2>/dev/null || echo "unknown")
 if [ "${INSTALLED_VLLM_VERSION}" == "unknown" ]; then
   error "vLLM not found in container"
 fi
 log "  ✅ vLLM ${INSTALLED_VLLM_VERSION} available"
+
+# Verify transformers version
+INSTALLED_TRANSFORMERS_VERSION=$(docker exec "${WORKER_NAME}" python3 -c "import transformers; print(transformers.__version__)" 2>/dev/null || echo "unknown")
+if [ "${INSTALLED_TRANSFORMERS_VERSION}" == "unknown" ]; then
+  error "transformers not found in container"
+fi
+log "  ✅ transformers ${INSTALLED_TRANSFORMERS_VERSION} available"
 
 # Verify Ray version
 INSTALLED_RAY_VERSION=$(docker exec "${WORKER_NAME}" python3 -c "import ray; print(ray.__version__)" 2>/dev/null || echo "unknown")
@@ -297,12 +372,33 @@ log "  ✅ Ray ${INSTALLED_RAY_VERSION} available"
 if [ -n "${SKIP_MODEL_DOWNLOAD}" ]; then
   log "Step 7/8: Verifying model weights (synced from head)"
   log "  Model: ${MODEL}"
+  if [ "${LOAD_FORMAT}" = "gguf" ]; then
+    log "  GGUF filter: ${GGUF_FILE}"
+  fi
   log "  Skipping download - model was synced from head node via rsync"
 
-  # Verify model was synced by checking for config.json
-  if ! docker exec "${WORKER_NAME}" bash -lc "
-    export HF_HOME=/root/.cache/huggingface
-    python3 -c \"
+  # Verify model was synced
+  if [ "${LOAD_FORMAT}" = "gguf" ]; then
+    if ! docker exec "${WORKER_NAME}" bash -lc "
+      export HF_HOME=/root/.cache/huggingface
+      python3 -c \"
+from huggingface_hub import snapshot_download
+import glob
+import os
+path = snapshot_download('${MODEL}', local_files_only=True)
+pattern = os.path.join(path, f'*${GGUF_FILE}*.gguf')
+matches = glob.glob(pattern)
+if not matches:
+    raise FileNotFoundError(f'No GGUF files matched {pattern}')
+print(f'  ✅ GGUF verified at: {matches[0]}')
+\"
+    "; then
+      error "Model verification failed - GGUF file missing on worker"
+    fi
+  else
+    if ! docker exec "${WORKER_NAME}" bash -lc "
+      export HF_HOME=/root/.cache/huggingface
+      python3 -c \"
 from huggingface_hub import snapshot_download
 import os
 path = snapshot_download('${MODEL}', local_files_only=True)
@@ -311,8 +407,9 @@ if not os.path.exists(config_path):
     raise FileNotFoundError(f'Model config not found at {config_path}')
 print(f'  ✅ Model verified at: {path}')
 \"
-  "; then
-    error "Model verification failed - model may not have been synced correctly from head"
+    "; then
+      error "Model verification failed - model may not have been synced correctly from head"
+    fi
   fi
 
   log "  Model verification complete"
@@ -331,18 +428,46 @@ else
   fi
 
   # Download model with verification (using 'hf download' instead of deprecated 'huggingface-cli download')
-  if ! docker exec "${WORKER_NAME}" bash -lc "
-    export HF_HOME=/root/.cache/huggingface
-    echo '  Downloading model files (excluding original/* and metal/* to save space)...'
-    hf download ${MODEL} ${HF_TOKEN_ARG} --exclude 'original/*' --exclude 'metal/*' 2>&1 | tail -5
-  "; then
-    error "Failed to download model ${MODEL}"
+  if [ "${LOAD_FORMAT}" = "gguf" ]; then
+    if ! docker exec "${WORKER_NAME}" bash -lc "
+      export HF_HOME=/root/.cache/huggingface
+      echo '  Downloading GGUF files matching: *${GGUF_FILE}*.gguf'
+      hf download ${MODEL} ${HF_TOKEN_ARG} --include '*${GGUF_FILE}*.gguf' 2>&1 | tail -5
+    "; then
+      error "Failed to download GGUF files for ${MODEL}"
+    fi
+  else
+    if ! docker exec "${WORKER_NAME}" bash -lc "
+      export HF_HOME=/root/.cache/huggingface
+      echo '  Downloading model files (excluding original/* and metal/* to save space)...'
+      hf download ${MODEL} ${HF_TOKEN_ARG} --exclude 'original/*' --exclude 'metal/*' 2>&1 | tail -5
+    "; then
+      error "Failed to download model ${MODEL}"
+    fi
   fi
 
   # Verify model was downloaded by checking for config.json
-  if ! docker exec "${WORKER_NAME}" bash -lc "
-    export HF_HOME=/root/.cache/huggingface
-    python3 -c \"
+  if [ "${LOAD_FORMAT}" = "gguf" ]; then
+    if ! docker exec "${WORKER_NAME}" bash -lc "
+      export HF_HOME=/root/.cache/huggingface
+      python3 -c \"
+from huggingface_hub import snapshot_download
+import glob
+import os
+path = snapshot_download('${MODEL}', local_files_only=True)
+pattern = os.path.join(path, f'*${GGUF_FILE}*.gguf')
+matches = glob.glob(pattern)
+if not matches:
+    raise FileNotFoundError(f'No GGUF files matched {pattern}')
+print(f'  ✅ GGUF verified at: {matches[0]}')
+\"
+    "; then
+      error "GGUF verification failed - matching file not found"
+    fi
+  else
+    if ! docker exec "${WORKER_NAME}" bash -lc "
+      export HF_HOME=/root/.cache/huggingface
+      python3 -c \"
 from huggingface_hub import snapshot_download
 import os
 path = snapshot_download('${MODEL}', local_files_only=True)
@@ -351,8 +476,9 @@ if not os.path.exists(config_path):
     raise FileNotFoundError(f'Model config not found at {config_path}')
 print(f'  ✅ Model verified at: {path}')
 \"
-  "; then
-    error "Model verification failed - config.json not found"
+    "; then
+      error "Model verification failed - config.json not found"
+    fi
   fi
 
   log "  Model download complete and verified"
