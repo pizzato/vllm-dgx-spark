@@ -38,6 +38,7 @@ MODELS=(
   "meta-llama/Llama-3.1-70B-Instruct"
   "microsoft/phi-4"
   "google/gemma-2-27b-it"
+  "Qwen/Qwen3-Coder-Next"
 )
 
 # Human-readable model descriptions
@@ -55,6 +56,7 @@ MODEL_NAMES=(
   "Llama-3.1-70B (70B params, ~65GB, high quality)"
   "Phi-4 (15B params, ~14-16GB, small but smart)"
   "Gemma2-27B (27B params, ~24-28GB, strong mid-size)"
+  "Qwen3-Coder-Next (80B total, 3B active, MoE, 256k context)"
 )
 
 # Tensor Parallelism (number of GPUs needed)
@@ -73,6 +75,7 @@ MODEL_TP=(
   2    # Llama-3.1-70B
   2    # Phi-4
   2    # Gemma2-27B
+  2    # Qwen3-Coder-Next
 )
 
 # Number of nodes required (all models use 2 nodes)
@@ -90,6 +93,7 @@ MODEL_NODES=(
   2    # Llama-3.1-70B
   2    # Phi-4
   2    # Gemma2-27B
+  2    # Qwen3-Coder-Next
 )
 
 # GPU Memory Utilization (0.90 default)
@@ -107,6 +111,7 @@ MODEL_GPU_MEM=(
   0.90  # Llama-3.1-70B
   0.90  # Phi-4
   0.90  # Gemma2-27B
+  0.90  # Qwen3-Coder-Next
 )
 
 # Max model length (context window)
@@ -124,6 +129,7 @@ MODEL_MAX_LEN=(
   131072 # Llama-3.1-70B - 128k context
   16384  # Phi-4
   8192   # Gemma2-27B
+  32768  # Qwen3-Coder-Next - default 256k, reduced for memory
 )
 
 # Trust remote code flag
@@ -141,6 +147,7 @@ MODEL_TRUST_REMOTE=(
   false  # Llama-3.1-70B
   true   # Phi-4 - requires trust_remote_code
   false  # Gemma2-27B
+  false  # Qwen3-Coder-Next
 )
 
 # Requires HF token (gated models)
@@ -158,6 +165,7 @@ MODEL_NEEDS_TOKEN=(
   true   # Llama-3.1-70B - gated
   false  # Phi-4
   true   # Gemma2-27B - gated
+  false  # Qwen3-Coder-Next
 )
 
 # Enable expert parallel for MoE models
@@ -175,6 +183,25 @@ MODEL_EXPERT_PARALLEL=(
   false  # Llama-3.1-70B
   false  # Phi-4
   false  # Gemma2-27B
+  true   # Qwen3-Coder-Next - MoE
+)
+
+# Additional vLLM args per model
+MODEL_EXTRA_ARGS=(
+  ""  # gpt-oss-120b
+  ""  # gpt-oss-20b
+  ""  # Qwen2.5-7B
+  ""  # Qwen2.5-14B
+  ""  # Qwen2.5-32B
+  ""  # Qwen2.5-72B
+  ""  # Mistral-7B
+  ""  # Mistral-Nemo-12B
+  ""  # Mixtral-8x7B
+  ""  # Llama-3.1-8B
+  ""  # Llama-3.1-70B
+  ""  # Phi-4
+  ""  # Gemma2-27B
+  "--enable-auto-tool-choice --tool-call-parser qwen3_coder"  # Qwen3-Coder-Next
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -455,6 +482,7 @@ NEW_MAX_LEN="${MODEL_MAX_LEN[$IDX]}"
 NEW_TRUST="${MODEL_TRUST_REMOTE[$IDX]}"
 NEEDS_TOKEN="${MODEL_NEEDS_TOKEN[$IDX]}"
 NEW_EXPERT_PARALLEL="${MODEL_EXPERT_PARALLEL[$IDX]}"
+NEW_EXTRA_ARGS="${MODEL_EXTRA_ARGS[$IDX]}"
 
 # Check if model needs HF token
 if [ "${NEEDS_TOKEN}" = "true" ]; then
@@ -486,6 +514,7 @@ echo "  GPU Memory Util:   ${NEW_GPU_MEM}"
 echo "  Max Context:       ${NEW_MAX_LEN}"
 [ "${NEW_TRUST}" = "true" ] && echo "  Trust Remote Code: yes"
 [ "${NEW_EXPERT_PARALLEL}" = "true" ] && echo "  Expert Parallel:   yes (MoE)"
+[ -n "${NEW_EXTRA_ARGS}" ] && echo "  Extra Args:        ${NEW_EXTRA_ARGS}"
 echo ""
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -558,6 +587,12 @@ if [ -f "${START_SCRIPT}" ]; then
   # Update ENABLE_EXPERT_PARALLEL (for MoE models)
   sed -i "s|^ENABLE_EXPERT_PARALLEL=.*|ENABLE_EXPERT_PARALLEL=\"\${ENABLE_EXPERT_PARALLEL:-${NEW_EXPERT_PARALLEL}}\"|" "${START_SCRIPT}"
 
+  # Update TRUST_REMOTE_CODE
+  sed -i "s|^TRUST_REMOTE_CODE=.*|TRUST_REMOTE_CODE=\"\${TRUST_REMOTE_CODE:-${NEW_TRUST}}\"|" "${START_SCRIPT}"
+
+  # Update EXTRA_ARGS
+  sed -i "s|^EXTRA_ARGS=.*|EXTRA_ARGS=\"\${EXTRA_ARGS:-${NEW_EXTRA_ARGS}}\"|" "${START_SCRIPT}"
+
   log "  Configuration updated in ${START_SCRIPT}"
 else
   log "  WARNING: ${START_SCRIPT} not found"
@@ -609,6 +644,8 @@ export TENSOR_PARALLEL="${NEW_TP}"
 export MAX_MODEL_LEN="${NEW_MAX_LEN}"
 export GPU_MEMORY_UTIL="${NEW_GPU_MEM}"
 export ENABLE_EXPERT_PARALLEL="${NEW_EXPERT_PARALLEL}"
+export TRUST_REMOTE_CODE="${NEW_TRUST}"
+export EXTRA_ARGS="${NEW_EXTRA_ARGS}"
 export SKIP_MODEL_DOWNLOAD=1  # We already downloaded
 
 if [ "${NEW_NODES}" -gt 1 ]; then

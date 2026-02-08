@@ -11,7 +11,7 @@ Deploy [vLLM](https://github.com/vllm-project/vllm) on NVIDIA DGX Spark systems 
 - **Single-command deployment** - Start entire cluster from head node via SSH
 - **Auto-detection** of InfiniBand IPs, network interfaces, and HCA devices (multi-node)
 - **Generic scripts** that work on any DGX Spark configuration
-- **13 model presets** including Llama, Qwen, Mixtral, Gemma
+- **14 model presets** including Llama, Qwen, Mixtral, Gemma
 - **InfiniBand RDMA** for high-speed inter-node communication (200Gb/s)
 - **Comprehensive benchmarking** with multiple test profiles
 
@@ -388,9 +388,14 @@ Models can run on single-node (TP=1) or dual-node (TP=2) depending on size.
 | 11 | `meta-llama/Llama-3.1-70B-Instruct` | ~65GB | Yes | High quality (needs HF token) |
 | 12 | `microsoft/phi-4` | ~14-16GB | Yes | Small but smart |
 | 13 | `google/gemma-2-27b-it` | ~24-28GB | Yes | Strong mid-size (needs HF token) |
+| 14 | `Qwen/Qwen3-Coder-Next` | ~80GB+ | No | MoE, tool-calling flags recommended |
 
 **Single-Node:** Models up to ~80GB fit on one DGX Spark (~120GB VRAM)
 **Dual-Node:** Required for GPT-OSS 120B and other very large models
+
+### Qwen3-Coder-Next Notes
+
+When serving `Qwen/Qwen3-Coder-Next`, keep the context length conservative (for example, `MAX_MODEL_LEN=32768`) and enable the tool-calling flags recommended by Qwen: `EXTRA_ARGS="--enable-auto-tool-choice --tool-call-parser qwen3_coder"`. The `switch_model.sh` entry applies these defaults automatically for multi-node runs.
 
 ## Benchmark Profiles
 
