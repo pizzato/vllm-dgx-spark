@@ -11,7 +11,7 @@ Deploy [vLLM](https://github.com/vllm-project/vllm) on NVIDIA DGX Spark systems 
 - **Single-command deployment** - Start entire cluster from head node via SSH
 - **Auto-detection** of InfiniBand IPs, network interfaces, and HCA devices (multi-node)
 - **Generic scripts** that work on any DGX Spark configuration
-- **13 model presets** including Llama, Qwen, Mixtral, Gemma
+- **14 model presets** including Llama, Qwen, Mixtral, Gemma, MiniMax-AWQ
 - **InfiniBand RDMA** for high-speed inter-node communication (200Gb/s)
 - **Comprehensive benchmarking** with multiple test profiles
 
@@ -388,9 +388,28 @@ Models can run on single-node (TP=1) or dual-node (TP=2) depending on size.
 | 11 | `meta-llama/Llama-3.1-70B-Instruct` | ~65GB | Yes | High quality (needs HF token) |
 | 12 | `microsoft/phi-4` | ~14-16GB | Yes | Small but smart |
 | 13 | `google/gemma-2-27b-it` | ~24-28GB | Yes | Strong mid-size (needs HF token) |
+| 14 | `QuantTrio/MiniMax-M2.5-AWQ` | ~122GiB files | No | AWQ MoE, auto-enables MiniMax parser flags + trust-remote-code |
 
 **Single-Node:** Models up to ~80GB fit on one DGX Spark (~120GB VRAM)
 **Dual-Node:** Required for GPT-OSS 120B and other very large models
+
+### MiniMax-M2.5-AWQ Notes
+
+This repo now includes built-in compatibility defaults for `QuantTrio/MiniMax-M2.5-AWQ`. When `MODEL` is set to this ID, `start_cluster.sh` automatically applies:
+
+- `--enable-expert-parallel`
+- `--trust-remote-code`
+- `--enable-auto-tool-choice`
+- `--tool-call-parser minimax_m2`
+- `--reasoning-parser minimax_m2_append_think`
+- `MAX_MODEL_LEN=32768`
+- Runtime env defaults:
+  - `VLLM_USE_DEEP_GEMM=0`
+  - `VLLM_USE_FLASHINFER_MOE_FP16=1`
+  - `VLLM_USE_FLASHINFER_SAMPLER=0`
+  - `OMP_NUM_THREADS=4`
+
+You can still override these in `config.local.env` (for example by setting `TOOL_CALL_PARSER`, `REASONING_PARSER`, `EXTRA_ARGS`, or the runtime env variables explicitly).
 
 ## Benchmark Profiles
 
