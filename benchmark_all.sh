@@ -50,6 +50,7 @@ MODELS=(
   "meta-llama/Llama-3.1-70B-Instruct"
   "microsoft/phi-4"
   "google/gemma-2-27b-it"
+  "QuantTrio/MiniMax-M2.5-AWQ"
 )
 
 MODEL_NAMES=(
@@ -66,15 +67,16 @@ MODEL_NAMES=(
   "Llama-3.1-70B"
   "Phi-4"
   "Gemma2-27B"
+  "MiniMax-M2.5-AWQ"
 )
 
 # All models run across both nodes (TP=2)
 MODEL_NODES=(
-  2 2 2 2 2 2 2 2 2 2 2 2 2
+  2 2 2 2 2 2 2 2 2 2 2 2 2 2
 )
 
 MODEL_NEEDS_TOKEN=(
-  false false false false false false false false false true true false true
+  false false false false false false false false false true true false true false
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

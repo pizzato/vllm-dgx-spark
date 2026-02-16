@@ -36,7 +36,7 @@ WORKER_HF_CACHE="${WORKER_HF_CACHE:-${HF_CACHE}}"
 # Model configuration
 MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 TENSOR_PARALLEL="${TENSOR_PARALLEL:-2}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-131072}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-}"
 GPU_MEMORY_UTIL="${GPU_MEMORY_UTIL:-0.90}"
 SWAP_SPACE="${SWAP_SPACE:-16}"
 SHM_SIZE="${SHM_SIZE:-16g}"
@@ -55,6 +55,33 @@ TRUST_REMOTE_CODE="${TRUST_REMOTE_CODE:-false}"
 # Model loading format (safetensors is recommended)
 LOAD_FORMAT="${LOAD_FORMAT:-safetensors}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
+SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-}"
+ENABLE_AUTO_TOOL_CHOICE="${ENABLE_AUTO_TOOL_CHOICE:-false}"
+TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-}"
+REASONING_PARSER="${REASONING_PARSER:-}"
+
+# Runtime tuning flags (can be overridden in config.local.env)
+VLLM_USE_DEEP_GEMM="${VLLM_USE_DEEP_GEMM:-}"
+VLLM_USE_FLASHINFER_MOE_FP16="${VLLM_USE_FLASHINFER_MOE_FP16:-}"
+VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-}"
+OMP_NUM_THREADS="${OMP_NUM_THREADS:-}"
+
+# Model-specific defaults for QuantTrio/MiniMax-M2.5-AWQ.
+if echo "${MODEL}" | grep -qiE "^(QuantTrio/)?MiniMax-M2\.5-AWQ$"; then
+  ENABLE_EXPERT_PARALLEL="true"
+  TRUST_REMOTE_CODE="true"
+  MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
+  VLLM_USE_DEEP_GEMM="${VLLM_USE_DEEP_GEMM:-0}"
+  VLLM_USE_FLASHINFER_MOE_FP16="${VLLM_USE_FLASHINFER_MOE_FP16:-1}"
+  VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
+  OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
+  ENABLE_AUTO_TOOL_CHOICE="${ENABLE_AUTO_TOOL_CHOICE:-true}"
+  TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-minimax_m2}"
+  REASONING_PARSER="${REASONING_PARSER:-minimax_m2_append_think}"
+fi
+
+# Global default max context length when not set by model profile or user
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-131072}"
 
 # Ports
 VLLM_PORT="${VLLM_PORT:-8000}"
@@ -893,6 +920,18 @@ fi
 if [ "${TRUST_REMOTE_CODE}" = "true" ]; then
   VLLM_ARGS="${VLLM_ARGS} --trust-remote-code"
 fi
+if [ -n "${SERVED_MODEL_NAME}" ]; then
+  VLLM_ARGS="${VLLM_ARGS} --served-model-name ${SERVED_MODEL_NAME}"
+fi
+if [ "${ENABLE_AUTO_TOOL_CHOICE}" = "true" ]; then
+  VLLM_ARGS="${VLLM_ARGS} --enable-auto-tool-choice"
+fi
+if [ -n "${TOOL_CALL_PARSER}" ]; then
+  VLLM_ARGS="${VLLM_ARGS} --tool-call-parser ${TOOL_CALL_PARSER}"
+fi
+if [ -n "${REASONING_PARSER}" ]; then
+  VLLM_ARGS="${VLLM_ARGS} --reasoning-parser ${REASONING_PARSER}"
+fi
 if [ -n "${EXTRA_ARGS}" ]; then
   VLLM_ARGS="${VLLM_ARGS} ${EXTRA_ARGS}"
 fi
@@ -905,6 +944,19 @@ docker exec "${NAME}" bash -lc "
   export PYTHONUNBUFFERED=1
   export VLLM_LOGGING_LEVEL=INFO
   export VLLM_MXFP4_USE_MARLIN=1
+
+  if [ -n "${VLLM_USE_DEEP_GEMM}" ]; then
+    export VLLM_USE_DEEP_GEMM="${VLLM_USE_DEEP_GEMM}"
+  fi
+  if [ -n "${VLLM_USE_FLASHINFER_MOE_FP16}" ]; then
+    export VLLM_USE_FLASHINFER_MOE_FP16="${VLLM_USE_FLASHINFER_MOE_FP16}"
+  fi
+  if [ -n "${VLLM_USE_FLASHINFER_SAMPLER}" ]; then
+    export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER}"
+  fi
+  if [ -n "${OMP_NUM_THREADS}" ]; then
+    export OMP_NUM_THREADS="${OMP_NUM_THREADS}"
+  fi
 
   nohup vllm serve ${MODEL} ${VLLM_ARGS} > /var/log/vllm.log 2>&1 &
 
